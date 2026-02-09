@@ -38,7 +38,7 @@ with tab1:
     if st.button("Run Literature Search"):
         with st.spinner("Searching literature..."):
             df = run_literature_search(query, max_results)
-            df.to_csv(os.path.join(DATA_DIR, "search_results.csv"), index=False)
+            df.to_excel(os.path.join(DATA_DIR, "search_results.xlsx"), index=False)
             st.session_state["search_df"] = df
             st.success(f"Found {len(df)} papers")
 
@@ -51,15 +51,15 @@ with tab1:
 with tab2:
     st.header("Step 2 — Abstract Screening (Manual Filtering)")
 
-    path = os.path.join(DATA_DIR, "search_results.csv")
+    path = os.path.join(DATA_DIR, "search_results.xlsx")
     if os.path.exists(path):
-        df = pd.read_csv(path)
+        df = pd.read_excel(path)
         st.info("Edit / filter rows below, then click Save")
 
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
         if st.button("Save Filtered Results"):
-            edited_df.to_csv(os.path.join(DATA_DIR, "screened_results.csv"), index=False)
+            edited_df.to_excel(os.path.join(DATA_DIR, "screened_results.xlsx"), index=False)
             st.session_state["screened_df"] = edited_df
             st.success("Filtered dataset saved")
 
@@ -72,9 +72,9 @@ with tab2:
 with tab3:
     st.header("Step 3 — PDF Download")
 
-    screened_path = os.path.join(DATA_DIR, "screened_results.csv")
+    screened_path = os.path.join(DATA_DIR, "screened_results.xlsx")
     if os.path.exists(screened_path):
-        df = pd.read_csv(screened_path)
+        df = pd.read_excel(screened_path)
         st.dataframe(df, use_container_width=True)
 
         col1, col2, col3 = st.columns(3)
@@ -92,7 +92,7 @@ with tab3:
                     only_reviews=only_reviews,
                     top_n=top_n
                 )
-                updated_df.to_csv(screened_path, index=False)
+                updated_df.to_excel(screened_path, index=False)
                 st.success(f"Downloaded {len(files)} PDFs")
 
         if os.path.exists(PDF_DIR):
@@ -137,3 +137,4 @@ with tab4:
                 st.text_area("Summary", summary, height=300)
 
         st.info("Word documents are saved in outputs/summaries/")
+
