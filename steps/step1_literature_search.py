@@ -4,7 +4,8 @@ import time
 import re
 import math
 from datetime import datetime
-
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 # =========================================================
 # CONFIG
 # =========================================================
@@ -201,32 +202,46 @@ def search_openalex(keyword, min_year, max_year):
 # =========================================================
 # ARXIV (HARDENED — SAME LOGIC, BETTER NETWORKING)
 # =========================================================
-def search_arxiv(keyword, min_year, max_year, max_retries=3):
+
+def get_retry_session():
+    session = requests.Session()
+    retries = Retry(
+        total=4,
+        connect=4,
+        read=4,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+def search_arxiv(keyword, min_year, max_year):
     print("🔍 Running arXiv...")
     base_url = "https://export.arxiv.org/api/query"
     results, start = [], 0
 
+    session = get_retry_session()
+
     try:
         while start < ARXIV_MAX_RESULTS:
-            # --- retry loop for network instability ---
-            for attempt in range(max_retries):
-                try:
-                    r = requests.get(
-                        base_url,
-                        params={"search_query": f"all:{keyword}", "start": start, "max_results": 50},
-                        headers={"User-Agent": USER_AGENT},
-                        timeout=15
-                    )
-                    r.raise_for_status()
-                    break
-                except requests.exceptions.ReadTimeout:
-                    print(f"⚠ arXiv timeout (start={start}) retry {attempt+1}/{max_retries}")
-                    time.sleep(5)
-                except Exception as e:
-                    print("❌ arXiv request failed:", e)
-                    return results, "FAILED"
-            else:
-                print("⚠ arXiv failed after retries — stopping early")
+            try:
+                r = session.get(
+                    base_url,
+                    params={"search_query": f"all:{keyword}", "start": start, "max_results": 50},
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=(5, 10),   # connect timeout, read timeout
+                )
+            except requests.exceptions.RequestException as e:
+                print("⚠ arXiv network failure — skipping arXiv:", e)
+                return results, "PARTIAL"
+
+            if r.status_code != 200:
+                print("⚠ arXiv bad status — stopping early:", r.status_code)
                 return results, "PARTIAL"
 
             entries = re.findall(r"<entry>(.*?)</entry>", r.text, re.DOTALL)
@@ -273,7 +288,7 @@ def search_arxiv(keyword, min_year, max_year, max_retries=3):
         return results, "COMPLETED"
 
     except Exception as e:
-        print("❌ arXiv error:", e)
+        print("❌ arXiv fatal error:", e)
         return results, "FAILED"
 
 
@@ -367,3 +382,4 @@ if __name__ == "__main__":
     for k, v in status.items():
         print(f"{k:<16}: {v}")
     print("=====================================================")
+
