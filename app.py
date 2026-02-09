@@ -2,139 +2,161 @@ import streamlit as st
 import pandas as pd
 import os
 
-from steps.step1_search import run_literature_search
-from steps.step3_pdf_download import download_pdfs
-from steps.step4_pdf_summarizer import summarize_pdfs
+from steps.step1_search import run_search
+from steps.step2_filter import filter_dataframe
+from steps.step3_pdf_download import run_pdf_download
+from steps.step4_pdf_summarizer import run_pdf_summarization
+from utils.io_helpers import ensure_dir, zip_folder
 
 st.set_page_config(page_title="Literature Survey Automation", layout="wide")
 
+BASE_OUTPUT_DIR = "outputs"
+SEARCH_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "search_results"))
+FILTER_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "filtered_results"))
+PDF_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "pdfs"))
+SUMMARY_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "summaries"))
+ZIP_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "zips"))
+
 st.title("📚 Literature Survey Automation Platform")
 
-BASE_DIR = os.getcwd()
-DATA_DIR = os.path.join(BASE_DIR, "data")
-PDF_DIR = os.path.join(DATA_DIR, "downloaded_pdfs")
-SUMMARY_DIR = os.path.join("outputs", "summaries")
+if "step1_df" not in st.session_state:
+    st.session_state.step1_df = None
+if "step2_df" not in st.session_state:
+    st.session_state.step2_df = None
+if "step3_df" not in st.session_state:
+    st.session_state.step3_df = None
 
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(PDF_DIR, exist_ok=True)
-os.makedirs(SUMMARY_DIR, exist_ok=True)
-
-tab1, tab2, tab3, tab4 = st.tabs([
-    "1️⃣ Literature Search",
-    "2️⃣ Abstract Screening",
-    "3️⃣ PDF Download",
-    "4️⃣ PDF → 1-Pager Summary"
-])
-
-# ======================================================
+# =========================================================
 # STEP 1 — SEARCH
-# ======================================================
-with tab1:
-    st.header("Step 1 — Literature Search")
+# =========================================================
+st.header("Step 1 — Literature Search")
 
-    query = st.text_input("Enter keyword / query")
-    max_results = st.number_input("Max papers", 50, 1000, 300)
+with st.form("step1_form"):
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        keyword = st.text_input("Keyword", value="isobutene")
+    with col2:
+        min_year = st.number_input("From Year", min_value=1900, max_value=2100, value=2016)
+    with col3:
+        max_year = st.number_input("To Year", min_value=1900, max_value=2100, value=2026)
 
-    if st.button("Run Literature Search"):
-        with st.spinner("Searching literature..."):
-            df = run_literature_search(query, max_results)
-            df.to_excel(os.path.join(DATA_DIR, "search_results.xlsx"), index=False)
-            st.session_state["search_df"] = df
-            st.success(f"Found {len(df)} papers")
+    run_step1 = st.form_submit_button("🔍 Run Search")
 
-    if "search_df" in st.session_state:
-        st.dataframe(st.session_state["search_df"], use_container_width=True)
+if run_step1:
+    with st.spinner("Running literature search..."):
+        df = run_search(keyword, min_year, max_year)
+    st.session_state.step1_df = df
+    path = os.path.join(SEARCH_DIR, f"{keyword}_raw_results.xlsx")
+    df.to_excel(path, index=False)
+    st.success(f"✅ {len(df)} papers found")
+    st.download_button("⬇ Download Raw Results Excel", data=open(path, "rb"), file_name=os.path.basename(path))
 
-# ======================================================
-# STEP 2 — SCREENING
-# ======================================================
-with tab2:
-    st.header("Step 2 — Abstract Screening (Manual Filtering)")
+if st.session_state.step1_df is not None:
+    st.dataframe(st.session_state.step1_df, use_container_width=True)
 
-    path = os.path.join(DATA_DIR, "search_results.xlsx")
-    if os.path.exists(path):
-        df = pd.read_excel(path)
-        st.info("Edit / filter rows below, then click Save")
+# =========================================================
+# STEP 2 — FILTER OR UPLOAD
+# =========================================================
+st.header("Step 2 — Filter Results or Upload Filtered Excel")
 
-        edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+uploaded_file = st.file_uploader("📤 Upload filtered Excel (optional)", type=["xlsx"])
 
-        if st.button("Save Filtered Results"):
-            edited_df.to_excel(os.path.join(DATA_DIR, "screened_results.xlsx"), index=False)
-            st.session_state["screened_df"] = edited_df
-            st.success("Filtered dataset saved")
+if uploaded_file:
+    df_uploaded = pd.read_excel(uploaded_file)
+    st.session_state.step2_df = df_uploaded
+    path = os.path.join(FILTER_DIR, "uploaded_filtered_results.xlsx")
+    df_uploaded.to_excel(path, index=False)
+    st.success(f"✅ Uploaded {len(df_uploaded)} rows from Excel")
+else:
+    if st.session_state.step1_df is not None:
+        df = st.session_state.step1_df
 
-    else:
-        st.warning("Run Step 1 first")
-
-# ======================================================
-# STEP 3 — PDF DOWNLOAD
-# ======================================================
-with tab3:
-    st.header("Step 3 — PDF Download")
-
-    screened_path = os.path.join(DATA_DIR, "screened_results.xlsx")
-    if os.path.exists(screened_path):
-        df = pd.read_excel(screened_path)
-        st.dataframe(df, use_container_width=True)
-
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            only_reviews = st.checkbox("Only Reviews")
+            min_citations = st.number_input("Min citations", min_value=0, value=0)
         with col2:
-            top_n = st.number_input("Top N by citations (0 = All)", 0, 500, 0)
-            top_n = None if top_n == 0 else top_n
+            reviews_only = st.checkbox("Reviews only")
+        with col3:
+            open_access_only = st.checkbox("Open access only")
+        with col4:
+            top_n = st.number_input("Top N (0 = all)", min_value=0, value=0)
 
-        if st.button("Download PDFs"):
-            with st.spinner("Downloading PDFs..."):
-                files, updated_df = download_pdfs(
-                    df,
-                    output_dir=PDF_DIR,
-                    only_reviews=only_reviews,
-                    top_n=top_n
+        year_min, year_max = int(df["Publication Year"].min()), int(df["Publication Year"].max())
+        year_range = st.slider("Year range", year_min, year_max, (year_min, year_max))
+
+        if st.button("🎯 Apply Filters"):
+            filtered_df = filter_dataframe(
+                df,
+                min_citations=min_citations,
+                reviews_only=reviews_only,
+                open_access_only=open_access_only,
+                year_range=year_range,
+                top_n=top_n if top_n > 0 else None
+            )
+            st.session_state.step2_df = filtered_df
+            path = os.path.join(FILTER_DIR, "filtered_results.xlsx")
+            filtered_df.to_excel(path, index=False)
+            st.success(f"✅ {len(filtered_df)} papers after filtering")
+            st.download_button("⬇ Download Filtered Excel", data=open(path, "rb"), file_name="filtered_results.xlsx")
+
+if st.session_state.step2_df is not None:
+    st.dataframe(st.session_state.step2_df, use_container_width=True)
+
+# =========================================================
+# STEP 3 — PDF DOWNLOAD (FROM STEP 2)
+# =========================================================
+st.header("Step 3 — PDF Download")
+
+if st.session_state.step2_df is not None:
+    col1, col2 = st.columns(2)
+    with col1:
+        delay = st.number_input("Request delay (seconds)", min_value=0.0, value=2.0, step=0.5)
+    with col2:
+        run_step3 = st.button("📥 Download PDFs")
+
+    if run_step3:
+        with st.spinner("Downloading PDFs..."):
+            step3_df = run_pdf_download(st.session_state.step2_df, output_dir=PDF_DIR, delay=delay)
+        st.session_state.step3_df = step3_df
+        step3_path = os.path.join(PDF_DIR, "pdf_download_results.xlsx")
+        step3_df.to_excel(step3_path, index=False)
+
+        st.success("✅ PDF download completed")
+        st.download_button("⬇ Download PDF Status Excel", data=open(step3_path, "rb"), file_name="pdf_download_results.xlsx")
+
+        zip_path = os.path.join(ZIP_DIR, "downloaded_pdfs.zip")
+        zip_folder(PDF_DIR, zip_path)
+        st.download_button("📦 Download All PDFs (ZIP)", data=open(zip_path, "rb"), file_name="downloaded_pdfs.zip")
+
+if st.session_state.step3_df is not None:
+    st.dataframe(st.session_state.step3_df, use_container_width=True)
+
+# =========================================================
+# STEP 4 — PDF → ONE-PAGER SUMMARIES
+# =========================================================
+st.header("Step 4 — PDF → 1-Pager Summaries")
+
+if os.listdir(PDF_DIR):
+    if st.button("🧠 Generate 1-Pager Summaries"):
+        with st.spinner("Generating summaries..."):
+            results = run_pdf_summarization(PDF_DIR, output_dir=SUMMARY_DIR)
+
+        summary_paths = [r["summary_path"] for r in results]
+
+        st.success(f"✅ Generated {len(summary_paths)} summaries")
+
+        for path in summary_paths:
+            with open(path, "rb") as f:
+                st.download_button(
+                    label=f"⬇ {os.path.basename(path)}",
+                    data=f,
+                    file_name=os.path.basename(path),
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
-                updated_df.to_excel(screened_path, index=False)
-                st.success(f"Downloaded {len(files)} PDFs")
 
-        if os.path.exists(PDF_DIR):
-            pdfs = [f for f in os.listdir(PDF_DIR) if f.endswith(".pdf")]
-            st.write(f"PDFs downloaded: {len(pdfs)}")
-            st.write(pdfs)
+        zip_path = os.path.join(ZIP_DIR, "one_pager_summaries.zip")
+        zip_folder(SUMMARY_DIR, zip_path)
+        st.download_button("📦 Download All Summaries (ZIP)", data=open(zip_path, "rb"), file_name="one_pager_summaries.zip")
 
-    else:
-        st.warning("Complete Step 2 first")
-
-# ======================================================
-# STEP 4 — PDF SUMMARIZATION
-# ======================================================
-with tab4:
-    st.header("Step 4 — PDF → 1-Pager Summarization")
-
-    uploaded_files = st.file_uploader(
-        "Upload PDFs (optional — or use downloaded PDFs)",
-        type=["pdf"],
-        accept_multiple_files=True
-    )
-
-    if uploaded_files:
-        upload_dir = os.path.join(PDF_DIR, "uploaded")
-        os.makedirs(upload_dir, exist_ok=True)
-
-        for f in uploaded_files:
-            with open(os.path.join(upload_dir, f.name), "wb") as out:
-                out.write(f.read())
-
-        pdf_dir = upload_dir
-    else:
-        pdf_dir = PDF_DIR
-
-    if st.button("Generate 1-Pager Summaries"):
-        with st.spinner("Summarizing PDFs..."):
-            outputs = summarize_pdfs(pdf_dir, output_dir=SUMMARY_DIR)
-            st.success("Summaries generated")
-
-            for file, summary in outputs.items():
-                st.subheader(file)
-                st.text_area("Summary", summary, height=300)
-
-        st.info("Word documents are saved in outputs/summaries/")
-
+else:
+    st.info("ℹ No PDFs found yet. Run Step 3 first.")
