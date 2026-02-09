@@ -5,12 +5,7 @@ import re
 import math
 from datetime import datetime
 
-# =========================================================
-# CONFIG
-# =========================================================
-MIN_YEAR = 2016
-CURRENT_YEAR = datetime.now().year
-
+MIN_YEAR_DEFAULT = 2016
 SEMANTIC_PAGE_SIZE = 50
 SEMANTIC_MAX_RESULTS = 500
 OPENALEX_MAX_RESULTS = 500
@@ -21,14 +16,14 @@ ARXIV_DELAY = 3.0
 
 USER_AGENT = "AutoLiteratureSurvey/1.0 (mailto:test@example.com)"
 
-# =========================================================
-# UTILITIES
-# =========================================================
+
 def clean_filename(text):
     return re.sub(r"[^a-zA-Z0-9_-]", "_", text)
 
+
 def normalize_title(title):
     return re.sub(r"\W+", "", title.lower()) if title else None
+
 
 def normalize_doi_to_url(doi):
     if not doi:
@@ -37,16 +32,19 @@ def normalize_doi_to_url(doi):
     doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "").replace("doi:", "")
     return f"https://doi.org/{doi}"
 
-def year_is_valid(year):
-    return year is None or (MIN_YEAR <= year <= CURRENT_YEAR)
+
+def year_is_valid(year, min_year, max_year):
+    return year is None or (min_year <= year <= max_year)
+
 
 def is_review_paper(title):
     return "YES" if title and "review" in title.lower() else "NO"
 
+
 # =========================================================
 # SEMANTIC SCHOLAR
 # =========================================================
-def search_semantic_scholar(keyword):
+def search_semantic_scholar(keyword, min_year, max_year):
     url = "https://api.semanticscholar.org/graph/v1/paper/search"
     results, offset = [], 0
 
@@ -74,7 +72,7 @@ def search_semantic_scholar(keyword):
 
         for item in data:
             year = item.get("year")
-            if not year_is_valid(year):
+            if not year_is_valid(year, min_year, max_year):
                 continue
 
             title = item.get("title")
@@ -113,10 +111,11 @@ def search_semantic_scholar(keyword):
 
     return results
 
+
 # =========================================================
 # OPENALEX
 # =========================================================
-def search_openalex(keyword):
+def search_openalex(keyword, min_year, max_year):
     url = "https://api.openalex.org/works"
     results, cursor = [], "*"
 
@@ -133,7 +132,7 @@ def search_openalex(keyword):
 
         for item in data.get("results", []):
             year = item.get("publication_year")
-            if not year_is_valid(year):
+            if not year_is_valid(year, min_year, max_year):
                 continue
 
             title = item.get("title")
@@ -177,10 +176,11 @@ def search_openalex(keyword):
 
     return results
 
+
 # =========================================================
 # ARXIV
 # =========================================================
-def search_arxiv(keyword):
+def search_arxiv(keyword, min_year, max_year):
     base_url = "https://export.arxiv.org/api/query"
     results, start = [], 0
 
@@ -203,7 +203,7 @@ def search_arxiv(keyword):
             arxiv_id = re.search(r"<id>(.*?)</id>", e)
 
             year = int(published.group(1)) if published else None
-            if not year_is_valid(year):
+            if not year_is_valid(year, min_year, max_year):
                 continue
 
             url = arxiv_id.group(1) if arxiv_id else None
@@ -235,6 +235,7 @@ def search_arxiv(keyword):
 
     return results
 
+
 # =========================================================
 # DEDUPLICATION
 # =========================================================
@@ -258,20 +259,16 @@ def merge_records(records):
 
     return list(merged.values())
 
+
 # =========================================================
-# PUBLIC API (USED BY STREAMLIT)
+# PUBLIC ENTRYPOINT
 # =========================================================
-def run_literature_search(keyword: str, max_results: int = 300) -> pd.DataFrame:
-    ss = search_semantic_scholar(keyword)
-    oa = search_openalex(keyword)
-    ax = search_arxiv(keyword)
+def run_search(keyword, min_year, max_year):
+    ss = search_semantic_scholar(keyword, min_year, max_year)
+    oa = search_openalex(keyword, min_year, max_year)
+    ax = search_arxiv(keyword, min_year, max_year)
 
     df = pd.DataFrame(merge_records(ss + oa + ax))
-
     df["Citations Count"] = pd.to_numeric(df["Citations Count"], errors="coerce").fillna(0)
     df = df.sort_values("Citations Count", ascending=False).reset_index(drop=True)
-
-    if max_results:
-        df = df.head(max_results)
-
     return df
