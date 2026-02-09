@@ -2,7 +2,6 @@ import requests
 import pandas as pd
 import time
 import re
-import math
 from datetime import datetime
 
 MIN_YEAR_DEFAULT = 2016
@@ -17,6 +16,9 @@ ARXIV_DELAY = 3.0
 USER_AGENT = "AutoLiteratureSurvey/1.0 (mailto:test@example.com)"
 
 
+# =========================================================
+# HELPERS
+# =========================================================
 def clean_filename(text):
     return re.sub(r"[^a-zA-Z0-9_-]", "_", text)
 
@@ -261,14 +263,23 @@ def merge_records(records):
 
 
 # =========================================================
-# PUBLIC ENTRYPOINT
+# STREAMLIT ENTRYPOINT
 # =========================================================
-def run_search(keyword, min_year, max_year):
-    ss = search_semantic_scholar(keyword, min_year, max_year)
-    oa = search_openalex(keyword, min_year, max_year)
-    ax = search_arxiv(keyword, min_year, max_year)
+def run_literature_search(query, max_results=200, min_year=2016, max_year=None):
+    """
+    Public entrypoint used by app.py
+    Returns Pandas DataFrame
+    """
+
+    if max_year is None:
+        max_year = datetime.now().year
+
+    ss = search_semantic_scholar(query, min_year, max_year)
+    oa = search_openalex(query, min_year, max_year)
+    ax = search_arxiv(query, min_year, max_year)
 
     df = pd.DataFrame(merge_records(ss + oa + ax))
     df["Citations Count"] = pd.to_numeric(df["Citations Count"], errors="coerce").fillna(0)
     df = df.sort_values("Citations Count", ascending=False).reset_index(drop=True)
+
     return df
