@@ -2,9 +2,12 @@ import requests
 import pandas as pd
 import time
 import re
+import math
 from datetime import datetime
 
-MIN_YEAR_DEFAULT = 2016
+# =========================================================
+# CONFIG
+# =========================================================
 SEMANTIC_PAGE_SIZE = 50
 SEMANTIC_MAX_RESULTS = 500
 OPENALEX_MAX_RESULTS = 500
@@ -17,7 +20,7 @@ USER_AGENT = "AutoLiteratureSurvey/1.0 (mailto:test@example.com)"
 
 
 # =========================================================
-# HELPERS
+# UTILITIES
 # =========================================================
 def clean_filename(text):
     return re.sub(r"[^a-zA-Z0-9_-]", "_", text)
@@ -47,195 +50,231 @@ def is_review_paper(title):
 # SEMANTIC SCHOLAR
 # =========================================================
 def search_semantic_scholar(keyword, min_year, max_year):
+    print("🔍 Running Semantic Scholar...")
     url = "https://api.semanticscholar.org/graph/v1/paper/search"
     results, offset = [], 0
 
-    while offset < SEMANTIC_MAX_RESULTS:
-        r = requests.get(
-            url,
-            params={
-                "query": keyword,
-                "fields": "title,abstract,year,citationCount,externalIds,url,openAccessPdf,authors,venue,isOpenAccess,referenceCount",
-                "limit": SEMANTIC_PAGE_SIZE,
-                "offset": offset
-            },
-            headers={"User-Agent": USER_AGENT},
-            timeout=30
-        )
+    try:
+        while offset < SEMANTIC_MAX_RESULTS:
+            r = requests.get(
+                url,
+                params={
+                    "query": keyword,
+                    "fields": "title,abstract,year,citationCount,externalIds,url,openAccessPdf,authors,venue,isOpenAccess,referenceCount",
+                    "limit": SEMANTIC_PAGE_SIZE,
+                    "offset": offset
+                },
+                headers={"User-Agent": USER_AGENT},
+                timeout=30
+            )
 
-        if r.status_code == 429:
-            time.sleep(5)
-            continue
-
-        r.raise_for_status()
-        data = r.json().get("data", [])
-        if not data:
-            break
-
-        for item in data:
-            year = item.get("year")
-            if not year_is_valid(year, min_year, max_year):
+            if r.status_code == 429:
+                time.sleep(5)
                 continue
 
-            title = item.get("title")
-            review = is_review_paper(title)
+            r.raise_for_status()
+            data = r.json().get("data", [])
+            if not data:
+                break
 
-            authors = ", ".join(
-                a.get("name") for a in (item.get("authors") or []) if a.get("name")
-            ) or None
+            for item in data:
+                year = item.get("year")
+                if not year_is_valid(year, min_year, max_year):
+                    continue
 
-            ext = item.get("externalIds") or {}
+                title = item.get("title")
+                review = is_review_paper(title)
 
-            results.append({
-                "Paper Title": title,
-                "Paper Link": item.get("url"),
-                "Publication Year": year,
-                "Publication Type": None,
-                "Publication Title": item.get("venue"),
-                "Author Names": authors,
-                "DOI": normalize_doi_to_url(ext.get("DOI")),
-                "PDF Link": (item.get("openAccessPdf") or {}).get("url"),
-                "Open Access": item.get("isOpenAccess"),
-                "Citations Count": item.get("citationCount") or 0,
-                "PubMed ID": ext.get("PubMed"),
-                "PMC ID": ext.get("PubMedCentral"),
-                "References": item.get("referenceCount"),
-                "arXiv ID": ext.get("ArXiv"),
-                "Source": "SemanticScholar",
-                "Abstract": item.get("abstract"),
-                "Review": review,
-                "Preprint": "NO",
-                "arXiv_used": "NO"
-            })
+                authors = ", ".join(
+                    a.get("name") for a in (item.get("authors") or []) if a.get("name")
+                ) or None
 
-        offset += SEMANTIC_PAGE_SIZE
-        time.sleep(REQUEST_DELAY)
+                ext = item.get("externalIds") or {}
 
-    return results
+                results.append({
+                    "Paper Title": title,
+                    "Paper Link": item.get("url"),
+                    "Publication Year": year,
+                    "Publication Type": None,
+                    "Publication Title": item.get("venue"),
+                    "Author Names": authors,
+                    "DOI": normalize_doi_to_url(ext.get("DOI")),
+                    "PDF Link": (item.get("openAccessPdf") or {}).get("url"),
+                    "Open Access": item.get("isOpenAccess"),
+                    "Citations Count": item.get("citationCount") or 0,
+                    "PubMed ID": ext.get("PubMed"),
+                    "PMC ID": ext.get("PubMedCentral"),
+                    "References": item.get("referenceCount"),
+                    "arXiv ID": ext.get("ArXiv"),
+                    "Source": "SemanticScholar",
+                    "Abstract": item.get("abstract"),
+                    "Review": review,
+                    "Preprint": "NO",
+                    "arXiv_used": "NO"
+                })
+
+            offset += SEMANTIC_PAGE_SIZE
+            time.sleep(REQUEST_DELAY)
+
+        return results, "COMPLETED"
+
+    except Exception as e:
+        print("❌ Semantic Scholar error:", e)
+        return results, "FAILED"
 
 
 # =========================================================
 # OPENALEX
 # =========================================================
 def search_openalex(keyword, min_year, max_year):
+    print("🔍 Running OpenAlex...")
     url = "https://api.openalex.org/works"
     results, cursor = [], "*"
 
-    while len(results) < OPENALEX_MAX_RESULTS:
-        r = requests.get(
-            url,
-            params={"search": keyword, "per-page": 50, "cursor": cursor},
-            headers={"User-Agent": USER_AGENT},
-            timeout=15
-        )
-        r.raise_for_status()
+    try:
+        while len(results) < OPENALEX_MAX_RESULTS:
+            try:
+                r = requests.get(
+                    url,
+                    params={"search": keyword, "per-page": 50, "cursor": cursor},
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=15
+                )
+                r.raise_for_status()
+            except requests.exceptions.Timeout:
+                print("⚠ OpenAlex timeout — stopping early")
+                return results, "PARTIAL"
 
-        data = r.json()
+            data = r.json()
 
-        for item in data.get("results", []):
-            year = item.get("publication_year")
-            if not year_is_valid(year, min_year, max_year):
-                continue
+            for item in data.get("results", []):
+                year = item.get("publication_year")
+                if not year_is_valid(year, min_year, max_year):
+                    continue
 
-            title = item.get("title")
-            review = is_review_paper(title)
+                title = item.get("title")
+                review = is_review_paper(title)
 
-            authors = ", ".join(
-                a.get("author", {}).get("display_name")
-                for a in (item.get("authorships") or [])
-                if a.get("author", {}).get("display_name")
-            ) or None
+                authors = ", ".join(
+                    a.get("author", {}).get("display_name")
+                    for a in (item.get("authorships") or [])
+                    if a.get("author", {}).get("display_name")
+                ) or None
 
-            source = (item.get("primary_location") or {}).get("source") or {}
+                source = (item.get("primary_location") or {}).get("source") or {}
 
-            results.append({
-                "Paper Title": title,
-                "Paper Link": item.get("id"),
-                "Publication Year": year,
-                "Publication Type": item.get("type"),
-                "Publication Title": source.get("display_name"),
-                "Author Names": authors,
-                "DOI": normalize_doi_to_url(item.get("doi")),
-                "PDF Link": None,
-                "Open Access": (item.get("open_access") or {}).get("is_oa"),
-                "Citations Count": item.get("cited_by_count") or 0,
-                "PubMed ID": None,
-                "PMC ID": None,
-                "References": item.get("referenced_works_count"),
-                "arXiv ID": None,
-                "Source": "OpenAlex",
-                "Abstract": None,
-                "Review": review,
-                "Preprint": "NO",
-                "arXiv_used": "NO"
-            })
+                results.append({
+                    "Paper Title": title,
+                    "Paper Link": item.get("id"),
+                    "Publication Year": year,
+                    "Publication Type": item.get("type"),
+                    "Publication Title": source.get("display_name"),
+                    "Author Names": authors,
+                    "DOI": normalize_doi_to_url(item.get("doi")),
+                    "PDF Link": None,
+                    "Open Access": (item.get("open_access") or {}).get("is_oa"),
+                    "Citations Count": item.get("cited_by_count") or 0,
+                    "PubMed ID": None,
+                    "PMC ID": None,
+                    "References": item.get("referenced_works_count"),
+                    "arXiv ID": None,
+                    "Source": "OpenAlex",
+                    "Abstract": None,
+                    "Review": review,
+                    "Preprint": "NO",
+                    "arXiv_used": "NO"
+                })
 
-        cursor = (data.get("meta") or {}).get("next_cursor")
-        if not cursor:
-            break
+            cursor = (data.get("meta") or {}).get("next_cursor")
+            if not cursor:
+                break
 
-        time.sleep(REQUEST_DELAY)
+            time.sleep(REQUEST_DELAY)
 
-    return results
+        return results, "COMPLETED"
+
+    except Exception as e:
+        print("❌ OpenAlex error:", e)
+        return results, "FAILED"
 
 
 # =========================================================
-# ARXIV
+# ARXIV (HARDENED — SAME LOGIC, BETTER NETWORKING)
 # =========================================================
-def search_arxiv(keyword, min_year, max_year):
+def search_arxiv(keyword, min_year, max_year, max_retries=3):
+    print("🔍 Running arXiv...")
     base_url = "https://export.arxiv.org/api/query"
     results, start = [], 0
 
-    while start < ARXIV_MAX_RESULTS:
-        r = requests.get(
-            base_url,
-            params={"search_query": f"all:{keyword}", "start": start, "max_results": 50},
-            headers={"User-Agent": USER_AGENT},
-            timeout=30
-        )
+    try:
+        while start < ARXIV_MAX_RESULTS:
+            # --- retry loop for network instability ---
+            for attempt in range(max_retries):
+                try:
+                    r = requests.get(
+                        base_url,
+                        params={"search_query": f"all:{keyword}", "start": start, "max_results": 50},
+                        headers={"User-Agent": USER_AGENT},
+                        timeout=15
+                    )
+                    r.raise_for_status()
+                    break
+                except requests.exceptions.ReadTimeout:
+                    print(f"⚠ arXiv timeout (start={start}) retry {attempt+1}/{max_retries}")
+                    time.sleep(5)
+                except Exception as e:
+                    print("❌ arXiv request failed:", e)
+                    return results, "FAILED"
+            else:
+                print("⚠ arXiv failed after retries — stopping early")
+                return results, "PARTIAL"
 
-        entries = re.findall(r"<entry>(.*?)</entry>", r.text, re.DOTALL)
-        if not entries:
-            break
+            entries = re.findall(r"<entry>(.*?)</entry>", r.text, re.DOTALL)
+            if not entries:
+                break
 
-        for e in entries:
-            title = re.search(r"<title>(.*?)</title>", e, re.DOTALL)
-            summary = re.search(r"<summary>(.*?)</summary>", e, re.DOTALL)
-            published = re.search(r"<published>(\d{4})-", e)
-            arxiv_id = re.search(r"<id>(.*?)</id>", e)
+            for e in entries:
+                title = re.search(r"<title>(.*?)</title>", e, re.DOTALL)
+                summary = re.search(r"<summary>(.*?)</summary>", e, re.DOTALL)
+                published = re.search(r"<published>(\d{4})-", e)
+                arxiv_id = re.search(r"<id>(.*?)</id>", e)
 
-            year = int(published.group(1)) if published else None
-            if not year_is_valid(year, min_year, max_year):
-                continue
+                year = int(published.group(1)) if published else None
+                if not year_is_valid(year, min_year, max_year):
+                    continue
 
-            url = arxiv_id.group(1) if arxiv_id else None
+                url = arxiv_id.group(1) if arxiv_id else None
 
-            results.append({
-                "Paper Title": title.group(1).strip() if title else None,
-                "Paper Link": url,
-                "Publication Year": year,
-                "Publication Type": "preprint",
-                "Publication Title": "arXiv",
-                "Author Names": None,
-                "DOI": None,
-                "PDF Link": url.replace("/abs/", "/pdf/") if url else None,
-                "Open Access": True,
-                "Citations Count": 0,
-                "PubMed ID": None,
-                "PMC ID": None,
-                "References": None,
-                "arXiv ID": url.split("/")[-1] if url else None,
-                "Source": "arXiv",
-                "Abstract": re.sub(r"\s+", " ", summary.group(1)) if summary else None,
-                "Review": "NO",
-                "Preprint": "YES",
-                "arXiv_used": "YES"
-            })
+                results.append({
+                    "Paper Title": title.group(1).strip() if title else None,
+                    "Paper Link": url,
+                    "Publication Year": year,
+                    "Publication Type": "preprint",
+                    "Publication Title": "arXiv",
+                    "Author Names": None,
+                    "DOI": None,
+                    "PDF Link": url.replace("/abs/", "/pdf/") if url else None,
+                    "Open Access": True,
+                    "Citations Count": 0,
+                    "PubMed ID": None,
+                    "PMC ID": None,
+                    "References": None,
+                    "arXiv ID": url.split("/")[-1] if url else None,
+                    "Source": "arXiv",
+                    "Abstract": re.sub(r"\s+", " ", summary.group(1)) if summary else None,
+                    "Review": "NO",
+                    "Preprint": "YES",
+                    "arXiv_used": "YES"
+                })
 
-        start += 50
-        time.sleep(ARXIV_DELAY)
+            start += 50
+            time.sleep(ARXIV_DELAY)
 
-    return results
+        return results, "COMPLETED"
+
+    except Exception as e:
+        print("❌ arXiv error:", e)
+        return results, "FAILED"
 
 
 # =========================================================
@@ -263,23 +302,68 @@ def merge_records(records):
 
 
 # =========================================================
-# STREAMLIT ENTRYPOINT
+# SAFE EXCEL WRITER (UNCHANGED)
 # =========================================================
-def run_literature_search(query, max_results=200, min_year=2016, max_year=None):
-    """
-    Public entrypoint used by app.py
-    Returns Pandas DataFrame
-    """
+def write_excel(df, writer, sheet):
+    ws = writer.book.add_worksheet(sheet)
+    writer.sheets[sheet] = ws
 
+    for c, col in enumerate(df.columns):
+        ws.write(0, c, col)
+
+    for r, row in enumerate(df.itertuples(index=False), start=1):
+        for c, val in enumerate(row):
+            if val is None or (isinstance(val, float) and not math.isfinite(val)):
+                ws.write_blank(r, c, None)
+            elif isinstance(val, str) and val.startswith("http"):
+                ws.write_url(r, c, val)
+            else:
+                ws.write(r, c, val)
+
+
+# =========================================================
+# PUBLIC ENTRYPOINT (STREAMLIT + SCRIPT SAFE)
+# =========================================================
+def run_literature_search(keyword, min_year=2016, max_year=None):
     if max_year is None:
         max_year = datetime.now().year
 
-    ss = search_semantic_scholar(query, min_year, max_year)
-    oa = search_openalex(query, min_year, max_year)
-    ax = search_arxiv(query, min_year, max_year)
+    ss, ss_status = search_semantic_scholar(keyword, min_year, max_year)
+    oa, oa_status = search_openalex(keyword, min_year, max_year)
+    ax, ax_status = search_arxiv(keyword, min_year, max_year)
 
     df = pd.DataFrame(merge_records(ss + oa + ax))
+
+    # 🔥 CRITICAL FIX: sort + reset index
     df["Citations Count"] = pd.to_numeric(df["Citations Count"], errors="coerce").fillna(0)
     df = df.sort_values("Citations Count", ascending=False).reset_index(drop=True)
 
-    return df
+    status = {
+        "SemanticScholar": ss_status,
+        "OpenAlex": oa_status,
+        "arXiv": ax_status
+    }
+
+    return df, status
+
+
+# =========================================================
+# CLI MODE (OPTIONAL)
+# =========================================================
+if __name__ == "__main__":
+    KEYWORD = "isobutene"
+    MIN_YEAR = 2016
+    MAX_YEAR = datetime.now().year
+
+    df, status = run_literature_search(KEYWORD, MIN_YEAR, MAX_YEAR)
+
+    output = f"{clean_filename(KEYWORD)}_{MIN_YEAR}_to_{MAX_YEAR}_FINAL_All_cols_Withsort.xlsx"
+
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        write_excel(df, writer, "Literature_Data")
+
+    print(f"\n🎉 Excel file created: {output}")
+    print("\n================ API EXECUTION STATUS ================")
+    for k, v in status.items():
+        print(f"{k:<16}: {v}")
+    print("=====================================================")
