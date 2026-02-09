@@ -1,312 +1,185 @@
-import requests
+import streamlit as st
 import pandas as pd
-import time
-import re
-from datetime import datetime
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import os
 
-# =========================================================
-# CONFIG
-# =========================================================
-SEMANTIC_PAGE_SIZE = 50
-SEMANTIC_MAX_RESULTS = 500
-OPENALEX_MAX_RESULTS = 500
-ARXIV_MAX_RESULTS = 300
+from steps.step1_literature_search import run_literature_search
+from steps.step2_filter_ui import step2_filter_ui
+from steps.step3_pdf_downloader import download_pdfs
+from steps.step4_pdf_summarizer import summarize_pdfs
+from utils.file_utils import create_zip
+from utils.io_helpers import ensure_dir
 
-REQUEST_DELAY = 1.0
-ARXIV_DELAY = 3.0
+st.set_page_config(page_title="Literature Survey Automation", layout="wide")
+st.title("📚 Literature Survey Automation Platform")
 
-USER_AGENT = "AutoLiteratureSurvey/1.0 (mailto:test@example.com)"
+# =====================================================
+# OUTPUT DIRECTORIES
+# =====================================================
+BASE_OUTPUT_DIR = "outputs"
+SEARCH_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "search_results"))
+FILTER_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "filtered_results"))
+PDF_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "pdfs"))
+SUMMARY_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "summaries"))
 
-# =========================================================
-# UTILITIES
-# =========================================================
-def normalize_title(title):
-    return re.sub(r"\W+", "", title.lower()) if title else None
+# =====================================================
+# STEP 1 — SEARCH
+# =====================================================
+st.header("Step 1 — Literature Search")
 
+query = st.text_input("Enter search query")
+min_year = st.number_input("Minimum publication year", value=2016, step=1)
+max_year = st.number_input("Maximum publication year", value=2026, step=1)
 
-def normalize_doi_to_url(doi):
-    if not doi:
-        return None
-    doi = doi.lower().strip()
-    doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "").replace("doi:", "")
-    return f"https://doi.org/{doi}"
+if st.button("🔍 Run Search"):
+    with st.spinner("Searching literature sources..."):
+        df = run_literature_search(query, min_year=min_year, max_year=max_year)
+        st.session_state["step1_df"] = df
 
+        path = os.path.join(SEARCH_DIR, "step1_raw_results.xlsx")
+        df.to_excel(path, index=False)
 
-def year_is_valid(year, min_year, max_year):
-    return year is None or (min_year <= year <= max_year)
+if "step1_df" in st.session_state:
+    st.success(f"{len(st.session_state['step1_df'])} papers retrieved.")
+    st.dataframe(st.session_state["step1_df"], use_container_width=True)
 
-
-def is_review_paper(title):
-    return "YES" if title and "review" in title.lower() else "NO"
-
-
-def get_retry_session():
-    session = requests.Session()
-    retries = Retry(
-        total=4,
-        connect=4,
-        read=4,
-        backoff_factor=2,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-        raise_on_status=False,
+    st.download_button(
+        "⬇ Download Step 1 Results (Excel)",
+        data=open(os.path.join(SEARCH_DIR, "step1_raw_results.xlsx"), "rb"),
+        file_name="step1_results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
 
+st.divider()
 
-# =========================================================
-# SEMANTIC SCHOLAR
-# =========================================================
-def search_semantic_scholar(keyword, min_year, max_year):
-    url = "https://api.semanticscholar.org/graph/v1/paper/search"
-    results, offset = [], 0
-    session = get_retry_session()
+# =====================================================
+# STEP 2 — FILTER, SELECT, OR UPLOAD
+# =====================================================
+st.header("Step 2 — Filter & Select Papers")
 
-    while offset < SEMANTIC_MAX_RESULTS:
-        try:
-            r = session.get(
-                url,
-                params={
-                    "query": keyword,
-                    "fields": "title,abstract,year,citationCount,externalIds,url,openAccessPdf,authors,venue,isOpenAccess,referenceCount",
-                    "limit": SEMANTIC_PAGE_SIZE,
-                    "offset": offset,
-                },
-                headers={"User-Agent": USER_AGENT},
-                timeout=(5, 15),
-            )
-        except requests.exceptions.RequestException:
-            break
+source_option = st.radio(
+    "Source of paper list",
+    ["From Step 1", "Upload filtered Excel"],
+    horizontal=True,
+)
 
-        if r.status_code == 429:
-            time.sleep(5)
-            continue
+if source_option == "Upload filtered Excel":
+    uploaded_file = st.file_uploader("Upload filtered Excel", type=["xlsx"])
+    if uploaded_file:
+        df_uploaded = pd.read_excel(uploaded_file)
+        st.session_state["step2_df"] = df_uploaded
 
-        if r.status_code != 200:
-            break
+        path = os.path.join(FILTER_DIR, "uploaded_filtered_results.xlsx")
+        df_uploaded.to_excel(path, index=False)
 
-        data = r.json().get("data", [])
-        if not data:
-            break
+if source_option == "From Step 1":
+    if "step1_df" not in st.session_state:
+        st.warning("Run Step 1 first.")
+    else:
+        selected_df = step2_filter_ui(st.session_state["step1_df"])
 
-        for item in data:
-            year = item.get("year")
-            if not year_is_valid(year, min_year, max_year):
-                continue
+if "step2_df" in st.session_state:
+    st.success(f"{len(st.session_state['step2_df'])} papers selected.")
+    st.dataframe(st.session_state["step2_df"], use_container_width=True)
 
-            title = item.get("title")
-            review = is_review_paper(title)
+    st.download_button(
+        "⬇ Download Step 2 Results (Excel)",
+        data=st.session_state["step2_df"].to_excel(index=False),
+        file_name="step2_results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
-            authors = ", ".join(
-                a.get("name") for a in (item.get("authors") or []) if a.get("name")
-            ) or None
+st.divider()
 
-            ext = item.get("externalIds") or {}
+# =====================================================
+# STEP 3 — PDF DOWNLOAD
+# =====================================================
+st.header("Step 3 — Download PDFs")
 
-            results.append({
-                "Paper Title": title,
-                "Paper Link": item.get("url"),
-                "Publication Year": year,
-                "Publication Type": None,
-                "Publication Title": item.get("venue"),
-                "Author Names": authors,
-                "DOI": normalize_doi_to_url(ext.get("DOI")),
-                "PDF Link": (item.get("openAccessPdf") or {}).get("url"),
-                "Open Access": item.get("isOpenAccess"),
-                "Citations Count": item.get("citationCount") or 0,
-                "PubMed ID": ext.get("PubMed"),
-                "PMC ID": ext.get("PubMedCentral"),
-                "References": item.get("referenceCount"),
-                "arXiv ID": ext.get("ArXiv"),
-                "Source": "SemanticScholar",
-                "Abstract": item.get("abstract"),
-                "Review": review,
-                "Preprint": "NO",
-                "arXiv_used": "NO",
-            })
+pdf_source = st.radio(
+    "Source of paper list",
+    ["From Step 2", "Upload Excel"],
+    horizontal=True,
+)
 
-        offset += SEMANTIC_PAGE_SIZE
-        time.sleep(REQUEST_DELAY)
+if pdf_source == "Upload Excel":
+    uploaded_file = st.file_uploader("Upload filtered Excel", type=["xlsx"])
+    if uploaded_file:
+        st.session_state["step2_df"] = pd.read_excel(uploaded_file)
 
-    return results
+if "step2_df" not in st.session_state:
+    st.warning("No filtered dataset available.")
+else:
+    st.dataframe(st.session_state["step2_df"], use_container_width=True)
 
+    if st.button("📥 Download PDFs"):
+        with st.spinner("Downloading PDFs..."):
+            pdf_paths = download_pdfs(st.session_state["step2_df"], output_dir=PDF_DIR)
+            st.session_state["downloaded_pdfs"] = pdf_paths
 
-# =========================================================
-# OPENALEX
-# =========================================================
-def search_openalex(keyword, min_year, max_year):
-    url = "https://api.openalex.org/works"
-    results, cursor = [], "*"
-    session = get_retry_session()
+    if "downloaded_pdfs" in st.session_state and st.session_state["downloaded_pdfs"]:
+        st.success(f"{len(st.session_state['downloaded_pdfs'])} PDFs downloaded.")
 
-    while len(results) < OPENALEX_MAX_RESULTS:
-        try:
-            r = session.get(
-                url,
-                params={"search": keyword, "per-page": 50, "cursor": cursor},
-                headers={"User-Agent": USER_AGENT},
-                timeout=(5, 15),
-            )
-        except requests.exceptions.RequestException:
-            break
+        zip_buffer = create_zip(
+            {os.path.basename(p): open(p, "rb").read() for p in st.session_state["downloaded_pdfs"]}
+        )
+        st.download_button(
+            "⬇ Download All PDFs (ZIP)",
+            data=zip_buffer,
+            file_name="downloaded_pdfs.zip",
+            mime="application/zip",
+        )
 
-        if r.status_code != 200:
-            break
+st.divider()
 
-        data = r.json()
+# =====================================================
+# STEP 4 — PDF → 1-PAGER SUMMARIZATION
+# =====================================================
+st.header("Step 4 — Generate 1-Pager Summaries")
 
-        for item in data.get("results", []):
-            year = item.get("publication_year")
-            if not year_is_valid(year, min_year, max_year):
-                continue
+pdf_source = st.radio(
+    "Select PDF Source",
+    ["From Step 3 Downloads", "Upload PDFs"],
+    horizontal=True,
+)
 
-            title = item.get("title")
-            review = is_review_paper(title)
+pdf_files = None
 
-            authors = ", ".join(
-                a.get("author", {}).get("display_name")
-                for a in (item.get("authorships") or [])
-                if a.get("author", {}).get("display_name")
-            ) or None
+if pdf_source == "From Step 3 Downloads":
+    if "downloaded_pdfs" in st.session_state:
+        pdf_files = {
+            os.path.basename(p): open(p, "rb").read()
+            for p in st.session_state["downloaded_pdfs"]
+        }
+else:
+    uploaded_pdfs = st.file_uploader(
+        "Upload one or more PDFs",
+        type=["pdf"],
+        accept_multiple_files=True,
+    )
+    if uploaded_pdfs:
+        pdf_files = {f.name: f.read() for f in uploaded_pdfs}
 
-            source = (item.get("primary_location") or {}).get("source") or {}
+if not pdf_files:
+    st.warning("No PDFs available.")
+else:
+    st.success(f"{len(pdf_files)} PDFs ready for summarization.")
 
-            results.append({
-                "Paper Title": title,
-                "Paper Link": item.get("id"),
-                "Publication Year": year,
-                "Publication Type": item.get("type"),
-                "Publication Title": source.get("display_name"),
-                "Author Names": authors,
-                "DOI": normalize_doi_to_url(item.get("doi")),
-                "PDF Link": None,
-                "Open Access": (item.get("open_access") or {}).get("is_oa"),
-                "Citations Count": item.get("cited_by_count") or 0,
-                "PubMed ID": None,
-                "PMC ID": None,
-                "References": item.get("referenced_works_count"),
-                "arXiv ID": None,
-                "Source": "OpenAlex",
-                "Abstract": None,
-                "Review": review,
-                "Preprint": "NO",
-                "arXiv_used": "NO",
-            })
+    if st.button("🧠 Generate Summaries"):
+        with st.spinner("Generating summaries..."):
+            summaries = summarize_pdfs(pdf_files, output_dir=SUMMARY_DIR)
+            st.session_state["summaries"] = summaries
 
-        cursor = (data.get("meta") or {}).get("next_cursor")
-        if not cursor:
-            break
+    if "summaries" in st.session_state:
+        for fname, text in st.session_state["summaries"].items():
+            st.subheader(fname)
+            st.text_area("Summary", text, height=280)
 
-        time.sleep(REQUEST_DELAY)
-
-    return results
-
-
-# =========================================================
-# ARXIV (HARDENED)
-# =========================================================
-def search_arxiv(keyword, min_year, max_year):
-    base_url = "https://export.arxiv.org/api/query"
-    results, start = [], 0
-    session = get_retry_session()
-
-    while start < ARXIV_MAX_RESULTS:
-        try:
-            r = session.get(
-                base_url,
-                params={"search_query": f"all:{keyword}", "start": start, "max_results": 50},
-                headers={"User-Agent": USER_AGENT},
-                timeout=(5, 10),
-            )
-        except requests.exceptions.RequestException:
-            break
-
-        if r.status_code != 200:
-            break
-
-        entries = re.findall(r"<entry>(.*?)</entry>", r.text, re.DOTALL)
-        if not entries:
-            break
-
-        for e in entries:
-            title = re.search(r"<title>(.*?)</title>", e, re.DOTALL)
-            summary = re.search(r"<summary>(.*?)</summary>", e, re.DOTALL)
-            published = re.search(r"<published>(\d{4})-", e)
-            arxiv_id = re.search(r"<id>(.*?)</id>", e)
-
-            year = int(published.group(1)) if published else None
-            if not year_is_valid(year, min_year, max_year):
-                continue
-
-            url = arxiv_id.group(1) if arxiv_id else None
-
-            results.append({
-                "Paper Title": title.group(1).strip() if title else None,
-                "Paper Link": url,
-                "Publication Year": year,
-                "Publication Type": "preprint",
-                "Publication Title": "arXiv",
-                "Author Names": None,
-                "DOI": None,
-                "PDF Link": url.replace("/abs/", "/pdf/") if url else None,
-                "Open Access": True,
-                "Citations Count": 0,
-                "PubMed ID": None,
-                "PMC ID": None,
-                "References": None,
-                "arXiv ID": url.split("/")[-1] if url else None,
-                "Source": "arXiv",
-                "Abstract": re.sub(r"\s+", " ", summary.group(1)) if summary else None,
-                "Review": "NO",
-                "Preprint": "YES",
-                "arXiv_used": "YES",
-            })
-
-        start += 50
-        time.sleep(ARXIV_DELAY)
-
-    return results
-
-
-# =========================================================
-# DEDUPLICATION
-# =========================================================
-def merge_records(records):
-    merged = {}
-    for r in records:
-        key = r["DOI"] or normalize_title(r["Paper Title"])
-        if not key:
-            continue
-
-        if key not in merged:
-            merged[key] = r
-        else:
-            m = merged[key]
-            m["Citations Count"] = max(m["Citations Count"], r["Citations Count"])
-            for col in m:
-                m[col] = m[col] or r[col]
-            if r["Preprint"] == "YES":
-                m["Preprint"] = "YES"
-                m["arXiv_used"] = "YES"
-
-    return list(merged.values())
-
-
-# =========================================================
-# PUBLIC ENTRYPOINT (UI CALLS THIS)
-# =========================================================
-def run_literature_search(keyword, min_year, max_year):
-    ss = search_semantic_scholar(keyword, min_year, max_year)
-    oa = search_openalex(keyword, min_year, max_year)
-    ax = search_arxiv(keyword, min_year, max_year)
-
-    df = pd.DataFrame(merge_records(ss + oa + ax))
-    if not df.empty:
-        df["Citations Count"] = pd.to_numeric(df["Citations Count"], errors="coerce").fillna(0)
-        df = df.sort_values("Citations Count", ascending=False).reset_index(drop=True)
-    return df
+        zip_buffer = create_zip(
+            {f"{k}.txt": v.encode("utf-8") for k, v in st.session_state["summaries"].items()}
+        )
+        st.download_button(
+            "⬇ Download All Summaries (ZIP)",
+            data=zip_buffer,
+            file_name="paper_summaries.zip",
+            mime="application/zip",
+        )
