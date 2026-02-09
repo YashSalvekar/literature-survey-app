@@ -6,7 +6,8 @@ from steps.step1_literature_search import run_literature_search
 from steps.step2_filter_ui import step2_filter_ui
 from steps.step3_pdf_downloader import download_pdfs
 from steps.step4_pdf_summarizer import summarize_pdfs
-from utils.file_utils import create_zip, ensure_dir
+from utils.file_utils import create_zip
+from utils.io_helpers import ensure_dir
 
 st.set_page_config(page_title="Literature Survey Automation", layout="wide")
 st.title("📚 Literature Survey Automation Platform")
@@ -82,9 +83,7 @@ if "step2_df" in st.session_state:
 
     st.download_button(
         "⬇ Download Step 2 Results (Excel)",
-        data=open(os.path.join(FILTER_DIR, "step2_filtered_results.xlsx"), "rb")
-        if os.path.exists(os.path.join(FILTER_DIR, "step2_filtered_results.xlsx"))
-        else st.session_state["step2_df"].to_excel(index=False),
+        data=st.session_state["step2_df"].to_excel(index=False),
         file_name="step2_results.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
@@ -120,7 +119,9 @@ else:
     if "downloaded_pdfs" in st.session_state and st.session_state["downloaded_pdfs"]:
         st.success(f"{len(st.session_state['downloaded_pdfs'])} PDFs downloaded.")
 
-        zip_buffer = create_zip(st.session_state["downloaded_pdfs"])
+        zip_buffer = create_zip(
+            {os.path.basename(p): open(p, "rb").read() for p in st.session_state["downloaded_pdfs"]}
+        )
         st.download_button(
             "⬇ Download All PDFs (ZIP)",
             data=zip_buffer,
@@ -144,7 +145,11 @@ pdf_source = st.radio(
 pdf_files = None
 
 if pdf_source == "From Step 3 Downloads":
-    pdf_files = st.session_state.get("downloaded_pdfs")
+    if "downloaded_pdfs" in st.session_state:
+        pdf_files = {
+            os.path.basename(p): open(p, "rb").read()
+            for p in st.session_state["downloaded_pdfs"]
+        }
 else:
     uploaded_pdfs = st.file_uploader(
         "Upload one or more PDFs",
@@ -169,7 +174,9 @@ else:
             st.subheader(fname)
             st.text_area("Summary", text, height=280)
 
-        zip_buffer = create_zip({k: v.encode("utf-8") for k, v in st.session_state["summaries"].items()})
+        zip_buffer = create_zip(
+            {f"{k}.txt": v.encode("utf-8") for k, v in st.session_state["summaries"].items()}
+        )
         st.download_button(
             "⬇ Download All Summaries (ZIP)",
             data=zip_buffer,
