@@ -1,32 +1,15 @@
-import pandas as pd
-import requests
 import os
 import re
 import time
-from urllib.parse import urljoin
+import requests
+import pandas as pd
 
-REQUEST_DELAY = 2
 
-# =========================================================
-# UTILITIES
-# =========================================================
 def clean_filename(text, max_length=150):
     text = re.sub(r"[^\w\s-]", "", str(text))
     text = re.sub(r"\s+", "_", text)
     return text[:max_length]
 
-def classify_failure(url):
-    if not url:
-        return "NO_URL"
-    if "mdpi.com" in url:
-        return "MDPI"
-    if "wiley.com" in url:
-        return "Wiley"
-    if "sagepub.com" in url:
-        return "SAGE"
-    if "springer.com" in url:
-        return "Springer"
-    return "OTHER"
 
 def session_headers():
     return {
@@ -40,9 +23,7 @@ def session_headers():
         "Referer": "https://www.google.com/",
     }
 
-# =========================================================
-# DOWNLOAD METHODS
-# =========================================================
+
 def download_pdf(url, filepath):
     session = requests.Session()
     headers = session_headers()
@@ -58,55 +39,44 @@ def download_pdf(url, filepath):
     with open(filepath, "wb") as f:
         f.write(r.content)
 
+
 def extract_pdf_from_html(url):
     r = requests.get(url, headers=session_headers(), timeout=30)
     r.raise_for_status()
 
-    pdf_links = re.findall(r'href="([^"]+\.pdf[^"]*)"', r.text, re.I)
-    if not pdf_links:
+    matches = re.findall(r'href="([^"]+\.pdf[^"]*)"', r.text, re.I)
+    if not matches:
         return None
 
-    return urljoin(url, pdf_links[0])
+    from urllib.parse import urljoin
+    return urljoin(url, matches[0])
 
-# =========================================================
-# PUBLIC API (USED BY STREAMLIT)
-# =========================================================
-def download_pdfs(df, output_dir="data/downloaded_pdfs", only_reviews=False, top_n=None):
+
+def run_pdf_download(df, output_dir="outputs/pdfs", delay=2):
     os.makedirs(output_dir, exist_ok=True)
-
-    for col in ["resolved_pdf_url", "status", "failure_reason"]:
-        if col not in df.columns:
-            df[col] = ""
-
-    df_targets = df[
-        (df["PDF Link"].notna()) &
-        (df["PDF Link"].astype(str).str.strip() != "")
-    ]
-
-    if only_reviews:
-        df_targets = df_targets[df_targets["Review"] == "YES"]
-
-    df_targets = df_targets.sort_values("Citations Count", ascending=False)
-
-    if top_n is not None:
-        df_targets = df_targets.head(top_n)
 
     results = []
 
-    for i, (idx, row) in enumerate(df_targets.iterrows(), start=1):
-        title = clean_filename(row["Paper Title"])
-        year = row["Publication Year"] if not pd.isna(row["Publication Year"]) else "NA"
-        filename = f"{i:03d}_{year}_{title}.pdf"
+    for i, row in df.iterrows():
+        title = clean_filename(row.get("Paper Title"))
+        year = row.get("Publication Year", "NA")
+        filename = f"{i+1:03d}_{year}_{title}.pdf"
         filepath = os.path.join(output_dir, filename)
 
-        url = row["PDF Link"]
-        df.at[idx, "resolved_pdf_url"] = url
+        url = row.get("PDF Link")
+        status = "FAILED"
+        resolved_url = None
+        reason = None
+
+        if not url or not isinstance(url, str):
+            results.append({**row, "download_status": "NO_URL"})
+            continue
 
         try:
             download_pdf(url, filepath)
-            df.at[idx, "status"] = "DOWNLOADED"
-            df.at[idx, "failure_reason"] = "DIRECT"
-            results.append(filepath)
+            status = "DOWNLOADED"
+            resolved_url = url
+            reason = "DIRECT"
 
         except Exception:
             try:
@@ -114,17 +84,24 @@ def download_pdfs(df, output_dir="data/downloaded_pdfs", only_reviews=False, top
                 if not pdf_url:
                     raise Exception("HTML_NO_PDF")
 
-                df.at[idx, "resolved_pdf_url"] = pdf_url
                 download_pdf(pdf_url, filepath)
-
-                df.at[idx, "status"] = "DOWNLOADED"
-                df.at[idx, "failure_reason"] = "HTML_SCRAPE"
-                results.append(filepath)
+                status = "DOWNLOADED"
+                resolved_url = pdf_url
+                reason = "HTML_SCRAPE"
 
             except Exception:
-                df.at[idx, "status"] = "FAILED"
-                df.at[idx, "failure_reason"] = classify_failure(url)
+                status = "FAILED"
+                resolved_url = url
+                reason = "BLOCKED_OR_UNKNOWN"
 
-        time.sleep(REQUEST_DELAY)
+        results.append({
+            **row,
+            "download_status": status,
+            "resolved_pdf_url": resolved_url,
+            "failure_reason": reason,
+            "local_pdf_path": filepath if status == "DOWNLOADED" else None
+        })
 
-    return results, df
+        time.sleep(delay)
+
+    return pd.DataFrame(results)
