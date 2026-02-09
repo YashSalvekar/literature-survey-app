@@ -1,14 +1,12 @@
 import streamlit as st
 import pandas as pd
 import os
-import shutil
-import tempfile
 
-from steps.step1_literature_search import run_literature_search
-from steps.step2_filter_ui import step2_filter_ui
-from steps.step3_pdf_downloader import download_pdfs
-from steps.step4_pdf_summarizer import summarize_pdfs
-from utils.file_utils import create_zip
+from steps.step1_literature_search import run_search
+from steps.step2_filter import filter_dataframe
+from steps.step3_pdf_download import run_pdf_download
+from steps.step4_pdf_summarizer import run_pdf_summarization
+from utils.io_helpers import ensure_dir, zip_folder
 
 st.set_page_config(page_title="Literature Survey Automation", layout="wide")
 
@@ -40,21 +38,19 @@ if "step3_df" not in st.session_state:
 st.header("Step 1 — Literature Search")
 
 with st.form("step1_form"):
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
         keyword = st.text_input("Keyword", value="isobutene")
     with col2:
         min_year = st.number_input("From Year", min_value=1900, max_value=2100, value=2016)
     with col3:
         max_year = st.number_input("To Year", min_value=1900, max_value=2100, value=2026)
-    with col4:
-        max_results = st.number_input("Max results (0 = all)", min_value=0, value=0)
 
     run_step1 = st.form_submit_button("🔍 Run Search")
 
 if run_step1:
     with st.spinner("Running literature search..."):
-        df = run_search(keyword, min_year, max_year, max_results=max_results if max_results > 0 else None)
+        df = run_search(keyword, min_year, max_year)
 
     st.session_state.step1_df = df
     path = os.path.join(SEARCH_DIR, f"{keyword}_raw_results.xlsx")
@@ -66,7 +62,7 @@ if st.session_state.step1_df is not None:
     st.dataframe(st.session_state.step1_df, use_container_width=True)
 
 # =========================================================
-# STEP 2 — FILTER, SELECT ROWS, OR UPLOAD
+# STEP 2 — FILTER / SELECT ROWS / UPLOAD
 # =========================================================
 st.header("Step 2 — Filter / Select Rows or Upload Filtered Excel")
 
@@ -110,14 +106,9 @@ elif st.session_state.step1_df is not None:
         st.success(f"✅ {len(filtered_df)} papers after filtering")
         st.download_button("⬇ Download Filtered Excel", data=open(path, "rb"), file_name="filtered_results.xlsx")
 
-    # ---------- NEW: Row Selection ----------
-    st.subheader("✅ Or Select Specific Rows Manually")
-    edited_df = st.data_editor(
-        df,
-        use_container_width=True,
-        num_rows="dynamic",
-        key="step2_editor"
-    )
+    # ---------- Manual row selection ----------
+    st.subheader("✅ Or Select Rows Manually")
+    edited_df = st.data_editor(df, use_container_width=True, key="step2_editor")
 
     if st.button("📌 Use Selected Rows"):
         st.session_state.step2_df = edited_df
@@ -130,7 +121,7 @@ if st.session_state.step2_df is not None:
     st.dataframe(st.session_state.step2_df, use_container_width=True)
 
 # =========================================================
-# STEP 3 — PDF DOWNLOAD (FROM STEP 2)
+# STEP 3 — PDF DOWNLOAD
 # =========================================================
 st.header("Step 3 — PDF Download")
 
@@ -175,7 +166,7 @@ if uploaded_pdfs:
     for pdf in uploaded_pdfs:
         with open(os.path.join(PDF_DIR, pdf.name), "wb") as f:
             f.write(pdf.read())
-    st.success(f"✅ Uploaded {len(uploaded_pdfs)} PDFs to processing folder")
+    st.success(f"✅ Uploaded {len(uploaded_pdfs)} PDFs")
 
 st.subheader("📁 Option B — Use PDFs Downloaded in Step 3")
 
@@ -203,4 +194,3 @@ if os.listdir(PDF_DIR):
 
 else:
     st.info("ℹ No PDFs found yet. Run Step 3 or upload PDFs above.")
-
