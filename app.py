@@ -73,45 +73,51 @@ source_option = st.radio(
     horizontal=True,
 )
 
+candidate_df = None
+
 if source_option == "Upload filtered Excel":
     uploaded_file = st.file_uploader("Upload filtered Excel", type=["xlsx"])
     if uploaded_file:
-        df_uploaded = pd.read_excel(uploaded_file)
-        st.session_state["step2_df"] = df_uploaded
-
-        path = os.path.join(FILTER_DIR, "uploaded_filtered_results.xlsx")
-        df_uploaded.to_excel(path, index=False)
+        candidate_df = pd.read_excel(uploaded_file)
+        st.info("Uploaded file loaded. Review and confirm below.")
 
 if source_option == "From Step 1":
     if "step1_df" not in st.session_state:
         st.warning("Run Step 1 first.")
     else:
-        selected_df = step2_filter_ui(st.session_state["step1_df"])
+        candidate_df = step2_filter_ui(st.session_state["step1_df"])
+        if isinstance(candidate_df, tuple):  # safety
+            candidate_df = candidate_df[0]
 
-        # 🔧 SAFETY: handle (df, status) return
-        if isinstance(selected_df, tuple):
-            selected_df = selected_df[0]
+# ---------- PREVIEW ----------
+if candidate_df is not None:
+    st.subheader("Selected / Filtered Papers")
+    st.dataframe(candidate_df, use_container_width=True)
+    st.success(f"{len(candidate_df)} papers selected.")
 
-        if selected_df is not None:
-            st.session_state["step2_df"] = selected_df
+    col1, col2 = st.columns(2)
 
-if "step2_df" in st.session_state:
-    st.success(f"{len(st.session_state['step2_df'])} papers selected.")
-    st.dataframe(st.session_state["step2_df"], use_container_width=True)
+    with col1:
+        if st.button("✅ Use Selected Papers → Step 3"):
+            st.session_state["step2_df"] = candidate_df
 
-    # 🔧 FIX: Streamlit needs BytesIO, not raw to_excel()
-    buffer = io.BytesIO()
-    st.session_state["step2_df"].to_excel(buffer, index=False)
-    buffer.seek(0)
+            path = os.path.join(FILTER_DIR, "step2_filtered_results.xlsx")
+            candidate_df.to_excel(path, index=False)
 
-    st.download_button(
-        "⬇ Download Step 2 Results (Excel)",
-        data=buffer,
-        file_name="step2_results.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+            st.success("Filtered papers saved and forwarded to Step 3.")
 
-st.divider()
+    with col2:
+        buffer = io.BytesIO()
+        candidate_df.to_excel(buffer, index=False)
+        buffer.seek(0)
+
+        st.download_button(
+            "⬇ Download Step 2 Results (Excel)",
+            data=buffer,
+            file_name="step2_results.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
 
 # =====================================================
 # STEP 3 — PDF DOWNLOAD
@@ -206,3 +212,4 @@ else:
             file_name="paper_summaries.zip",
             mime="application/zip",
         )
+
