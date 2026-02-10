@@ -75,7 +75,11 @@ if source_option == "From Step 1":
     if "step1_df" not in st.session_state:
         st.warning("Run Step 1 first.")
     else:
+        #selected_df = step2_filter_ui(st.session_state["step1_df"])
         selected_df = step2_filter_ui(st.session_state["step1_df"])
+        if selected_df is not None:
+            st.session_state["step2_df"] = selected_df
+
 
 if "step2_df" in st.session_state:
     st.success(f"{len(st.session_state['step2_df'])} papers selected.")
@@ -183,3 +187,4 @@ else:
             file_name="paper_summaries.zip",
             mime="application/zip",
         )
+
