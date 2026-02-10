@@ -1,44 +1,54 @@
 import streamlit as st
 import pandas as pd
+import os
 import io
 
 from steps.step1_literature_search import run_literature_search
 from steps.step2_filter_ui import step2_filter_ui
 from steps.step3_pdf_downloader import download_pdfs
 from steps.step4_pdf_summarizer import summarize_pdfs
+from utils.file_utils import create_zip
+from utils.io_helpers import ensure_dir
 
 st.set_page_config(page_title="Literature Survey Automation", layout="wide")
-st.title("📚 Literature Survey Automation")
+st.title("📚 Literature Survey Automation Platform")
 
 # =====================================================
-# SESSION STATE INIT
+# OUTPUT DIRECTORIES
 # =====================================================
-for k in ["step1_df", "step2_df", "step3_df", "step4_df"]:
-    if k not in st.session_state:
-        st.session_state[k] = None
+BASE_OUTPUT_DIR = "outputs"
+SEARCH_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "search_results"))
+FILTER_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "filtered_results"))
+PDF_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "pdfs"))
+SUMMARY_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "summaries"))
 
 # =====================================================
-# STEP 1 — LITERATURE SEARCH
+# STEP 1 — SEARCH
 # =====================================================
-st.header("✅ Step 1 — Literature Search")
+st.header("Step 1 — Literature Search")
 
-keyword = st.text_input("Enter keyword(s)", value="isobutene")
-min_year = st.number_input("Minimum year", value=2016, step=1)
-max_results = st.number_input("Max results (0 = all possible)", value=500, step=50)
+query = st.text_input("Enter search query")
+min_year = st.number_input("Minimum publication year", value=2016, step=1)
+max_year = st.number_input("Maximum publication year", value=2026, step=1)
 
-if st.button("🔍 Run Literature Search"):
-    with st.spinner("Searching Semantic Scholar, OpenAlex, arXiv..."):
-        df = run_literature_search(
-            keyword=keyword,
-            min_year=min_year,
-            max_results=None if max_results == 0 else int(max_results),
-        )
+if st.button("🔍 Run Search"):
+    with st.spinner("Searching literature sources..."):
+        df = run_literature_search(query, min_year=min_year, max_year=max_year)
+
+        # 🔧 SAFETY: handle (df, status) return
+        if isinstance(df, tuple):
+            df = df[0]
+
         st.session_state["step1_df"] = df
-        st.success(f"✅ Step 1 completed — {len(df)} papers found")
 
-if st.session_state["step1_df"] is not None:
+        path = os.path.join(SEARCH_DIR, "step1_raw_results.xlsx")
+        df.to_excel(path, index=False)
+
+if "step1_df" in st.session_state:
+    st.success(f"{len(st.session_state['step1_df'])} papers retrieved.")
     st.dataframe(st.session_state["step1_df"], use_container_width=True)
 
+    # 🔧 FIX: Step 1 download must use step1_df, not step2_df
     buffer = io.BytesIO()
     st.session_state["step1_df"].to_excel(buffer, index=False)
     buffer.seek(0)
@@ -46,73 +56,153 @@ if st.session_state["step1_df"] is not None:
     st.download_button(
         "⬇ Download Step 1 Results (Excel)",
         data=buffer,
-        file_name="step1_literature_results.xlsx",
+        file_name="step1_results.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
+st.divider()
+
 # =====================================================
-# STEP 2 — FILTER / SELECTION
+# STEP 2 — FILTER, SELECT, OR UPLOAD
 # =====================================================
-st.header("✅ Step 2 — Filter / Select Papers")
+st.header("Step 2 — Filter & Select Papers")
 
-if st.session_state["step1_df"] is None:
-    st.info("Run Step 1 first.")
-else:
-    st.session_state["step2_df"] = step2_filter_ui(st.session_state["step1_df"])
+source_option = st.radio(
+    "Source of paper list",
+    ["From Step 1", "Upload filtered Excel"],
+    horizontal=True,
+)
 
-    if st.session_state["step2_df"] is not None and not st.session_state["step2_df"].empty:
-        st.success(f"✅ Step 2 completed — {len(st.session_state['step2_df'])} papers selected")
+if source_option == "Upload filtered Excel":
+    uploaded_file = st.file_uploader("Upload filtered Excel", type=["xlsx"])
+    if uploaded_file:
+        df_uploaded = pd.read_excel(uploaded_file)
+        st.session_state["step2_df"] = df_uploaded
 
-        buffer = io.BytesIO()
-        st.session_state["step2_df"].to_excel(buffer, index=False)
-        buffer.seek(0)
+        path = os.path.join(FILTER_DIR, "uploaded_filtered_results.xlsx")
+        df_uploaded.to_excel(path, index=False)
 
-        st.download_button(
-            "⬇ Download Step 2 Results (Excel)",
-            data=buffer,
-            file_name="step2_filtered_results.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+if source_option == "From Step 1":
+    if "step1_df" not in st.session_state:
+        st.warning("Run Step 1 first.")
+    else:
+        selected_df = step2_filter_ui(st.session_state["step1_df"])
+
+        # 🔧 SAFETY: handle (df, status) return
+        if isinstance(selected_df, tuple):
+            selected_df = selected_df[0]
+
+        if selected_df is not None:
+            st.session_state["step2_df"] = selected_df
+
+if "step2_df" in st.session_state:
+    st.success(f"{len(st.session_state['step2_df'])} papers selected.")
+    st.dataframe(st.session_state["step2_df"], use_container_width=True)
+
+    # 🔧 FIX: Streamlit needs BytesIO, not raw to_excel()
+    buffer = io.BytesIO()
+    st.session_state["step2_df"].to_excel(buffer, index=False)
+    buffer.seek(0)
+
+    st.download_button(
+        "⬇ Download Step 2 Results (Excel)",
+        data=buffer,
+        file_name="step2_results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+st.divider()
 
 # =====================================================
 # STEP 3 — PDF DOWNLOAD
 # =====================================================
-st.header("✅ Step 3 — Download PDFs")
+st.header("Step 3 — Download PDFs")
 
-if st.session_state["step2_df"] is None:
-    st.info("Complete Step 2 first.")
-elif st.button("⬇ Download PDFs"):
-    with st.spinner("Downloading PDFs..."):
-        df = download_pdfs(st.session_state["step2_df"])
-        st.session_state["step3_df"] = df
-        st.success("✅ Step 3 completed")
+pdf_source = st.radio(
+    "Source of paper list",
+    ["From Step 2", "Upload Excel"],
+    horizontal=True,
+)
 
-if st.session_state["step3_df"] is not None:
-    st.dataframe(st.session_state["step3_df"], use_container_width=True)
+if pdf_source == "Upload Excel":
+    uploaded_file = st.file_uploader("Upload filtered Excel", type=["xlsx"])
+    if uploaded_file:
+        st.session_state["step2_df"] = pd.read_excel(uploaded_file)
+
+if "step2_df" not in st.session_state:
+    st.warning("No filtered dataset available.")
+else:
+    st.dataframe(st.session_state["step2_df"], use_container_width=True)
+
+    if st.button("📥 Download PDFs"):
+        with st.spinner("Downloading PDFs..."):
+            pdf_paths = download_pdfs(st.session_state["step2_df"], output_dir=PDF_DIR)
+            st.session_state["downloaded_pdfs"] = pdf_paths
+
+    if "downloaded_pdfs" in st.session_state and st.session_state["downloaded_pdfs"]:
+        st.success(f"{len(st.session_state['downloaded_pdfs'])} PDFs downloaded.")
+
+        zip_buffer = create_zip(
+            {os.path.basename(p): open(p, "rb").read() for p in st.session_state["downloaded_pdfs"]}
+        )
+        st.download_button(
+            "⬇ Download All PDFs (ZIP)",
+            data=zip_buffer,
+            file_name="downloaded_pdfs.zip",
+            mime="application/zip",
+        )
+
+st.divider()
 
 # =====================================================
-# STEP 4 — PDF SUMMARIZATION
+# STEP 4 — PDF → 1-PAGER SUMMARIZATION
 # =====================================================
-st.header("✅ Step 4 — Summarize PDFs")
+st.header("Step 4 — Generate 1-Pager Summaries")
 
-if st.session_state["step3_df"] is None:
-    st.info("Complete Step 3 first.")
-elif st.button("🧠 Run Summarization"):
-    with st.spinner("Summarizing PDFs..."):
-        df = summarize_pdfs(st.session_state["step3_df"])
-        st.session_state["step4_df"] = df
-        st.success("✅ Step 4 completed")
+pdf_source = st.radio(
+    "Select PDF Source",
+    ["From Step 3 Downloads", "Upload PDFs"],
+    horizontal=True,
+)
 
-if st.session_state["step4_df"] is not None:
-    st.dataframe(st.session_state["step4_df"], use_container_width=True)
+pdf_files = None
 
-    buffer = io.BytesIO()
-    st.session_state["step4_df"].to_excel(buffer, index=False)
-    buffer.seek(0)
-
-    st.download_button(
-        "⬇ Download Final Results (Excel)",
-        data=buffer,
-        file_name="final_summarized_results.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+if pdf_source == "From Step 3 Downloads":
+    if "downloaded_pdfs" in st.session_state:
+        pdf_files = {
+            os.path.basename(p): open(p, "rb").read()
+            for p in st.session_state["downloaded_pdfs"]
+        }
+else:
+    uploaded_pdfs = st.file_uploader(
+        "Upload one or more PDFs",
+        type=["pdf"],
+        accept_multiple_files=True,
     )
+    if uploaded_pdfs:
+        pdf_files = {f.name: f.read() for f in uploaded_pdfs}
+
+if not pdf_files:
+    st.warning("No PDFs available.")
+else:
+    st.success(f"{len(pdf_files)} PDFs ready for summarization.")
+
+    if st.button("🧠 Generate Summaries"):
+        with st.spinner("Generating summaries..."):
+            summaries = summarize_pdfs(pdf_files, output_dir=SUMMARY_DIR)
+            st.session_state["summaries"] = summaries
+
+    if "summaries" in st.session_state:
+        for fname, text in st.session_state["summaries"].items():
+            st.subheader(fname)
+            st.text_area("Summary", text, height=280)
+
+        zip_buffer = create_zip(
+            {f"{k}.txt": v.encode("utf-8") for k, v in st.session_state["summaries"].items()}
+        )
+        st.download_button(
+            "⬇ Download All Summaries (ZIP)",
+            data=zip_buffer,
+            file_name="paper_summaries.zip",
+            mime="application/zip",
+        )
