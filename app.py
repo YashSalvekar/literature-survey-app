@@ -86,12 +86,10 @@ if source_option == "From Step 1":
         st.warning("Run Step 1 first.")
     else:
         candidate_df = step2_filter_ui(st.session_state["step1_df"])
-        if isinstance(candidate_df, tuple):  # safety
-            candidate_df = candidate_df[0]
 
-# ---------- PREVIEW ----------
+# ---------- PREVIEW + COMMIT ----------
 if candidate_df is not None:
-    st.subheader("Selected / Filtered Papers")
+    st.subheader("Final Papers Going to Step 3")
     st.dataframe(candidate_df, use_container_width=True)
     st.success(f"{len(candidate_df)} papers selected.")
 
@@ -100,17 +98,14 @@ if candidate_df is not None:
     with col1:
         if st.button("✅ Use Selected Papers → Step 3"):
             st.session_state["step2_df"] = candidate_df
-
             path = os.path.join(FILTER_DIR, "step2_filtered_results.xlsx")
             candidate_df.to_excel(path, index=False)
-
             st.success("Filtered papers saved and forwarded to Step 3.")
 
     with col2:
         buffer = io.BytesIO()
         candidate_df.to_excel(buffer, index=False)
         buffer.seek(0)
-
         st.download_button(
             "⬇ Download Step 2 Results (Excel)",
             data=buffer,
@@ -212,4 +207,5 @@ else:
             file_name="paper_summaries.zip",
             mime="application/zip",
         )
+
 
