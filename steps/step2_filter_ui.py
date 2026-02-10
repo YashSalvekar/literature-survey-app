@@ -77,7 +77,7 @@ def step2_filter_ui(df_input):
     selection = st.dataframe(
         filtered_df,
         use_container_width=True,
-        selection_mode="multiple",
+        selection_mode="multi-row",
         on_select="rerun",
     )
 
