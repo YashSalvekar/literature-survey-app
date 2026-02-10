@@ -137,7 +137,7 @@ else:
 
     if st.button("📥 Download PDFs"):
         with st.spinner("Downloading PDFs..."):
-            pdf_paths = download_pdfs(st.session_state["step2_df"], output_dir=PDF_DIR)
+            pdf_paths = download_pdfs(st.session_state["step2_df"])
             st.session_state["downloaded_pdfs"] = pdf_paths
 
     if "downloaded_pdfs" in st.session_state and st.session_state["downloaded_pdfs"]:
@@ -153,7 +153,6 @@ else:
             mime="application/zip",
         )
 
-st.divider()
 
 # =====================================================
 # STEP 4 — PDF → 1-PAGER SUMMARIZATION
@@ -207,5 +206,6 @@ else:
             file_name="paper_summaries.zip",
             mime="application/zip",
         )
+
 
 
