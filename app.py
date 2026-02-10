@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
+import io
 
 from steps.step1_literature_search import run_literature_search
 from steps.step2_filter_ui import step2_filter_ui
@@ -41,13 +42,24 @@ if st.button("🔍 Run Search"):
 if "step1_df" in st.session_state:
     st.success(f"{len(st.session_state['step1_df'])} papers retrieved.")
     st.dataframe(st.session_state["step1_df"], use_container_width=True)
-
+    
+    buffer = io.BytesIO()
+    st.session_state["step2_df"].to_excel(buffer, index=False)
+    buffer.seek(0)
+    
     st.download_button(
-        "⬇ Download Step 1 Results (Excel)",
-        data=open(os.path.join(SEARCH_DIR, "step1_raw_results.xlsx"), "rb"),
-        file_name="step1_results.xlsx",
+        "⬇ Download Step 2 Results (Excel)",
+        data=buffer,
+        file_name="step2_results.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    )  
+
+    #st.download_button(
+     #   "⬇ Download Step 1 Results (Excel)",
+     #   data=open(os.path.join(SEARCH_DIR, "step1_raw_results.xlsx"), "rb"),
+     #   file_name="step1_results.xlsx",
+    #    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  #  )
 
 st.divider()
 
@@ -187,4 +199,5 @@ else:
             file_name="paper_summaries.zip",
             mime="application/zip",
         )
+
 
