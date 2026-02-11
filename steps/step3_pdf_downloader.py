@@ -5,72 +5,65 @@ import streamlit as st
 import pandas as pd
 from time import sleep
 from urllib.parse import urljoin
+from bs4 import BeautifulSoup
 
 
-# =====================================================
-# HELPERS
-# =====================================================
-def safe_filename(text, max_length=150):
-    text = re.sub(r"[^\w\s-]", "", str(text))
-    text = re.sub(r"\s+", "_", text)
-    return text[:max_length]
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+    "Accept": "application/pdf,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
+}
 
 
-def session_headers():
-    return {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/pdf",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/",
-    }
+def safe_filename(text):
+    return "".join(c for c in text if c.isalnum() or c in (" ", "_", "-")).rstrip()
 
 
-def is_pdf_response(resp):
-    return "pdf" in resp.headers.get("Content-Type", "").lower()
+def looks_like_pdf_response(resp):
+    ctype = resp.headers.get("Content-Type", "").lower()
+    return "application/pdf" in ctype or resp.url.lower().endswith(".pdf")
 
 
-def extract_pdf_from_html(url):
-    r = requests.get(url, headers=session_headers(), timeout=30)
+def extract_pdf_from_html(html, base_url):
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Common cases
+    for tag in soup.find_all(["a", "iframe", "embed"]):
+        href = tag.get("href") or tag.get("src")
+        if not href:
+            continue
+        if ".pdf" in href.lower():
+            return urljoin(base_url, href)
+
+    return None
+
+
+def try_direct_download(url, path):
+    r = requests.get(url, headers=HEADERS, timeout=25, stream=True, allow_redirects=True)
     r.raise_for_status()
 
-    matches = re.findall(r'href="([^"]+\.pdf[^"]*)"', r.text, re.I)
-    if not matches:
-        return None
-
-    return urljoin(url, matches[0])
-
-
-def download_binary(url, path):
-    session = requests.Session()
-    headers = session_headers()
-
-    session.get("https://www.google.com", headers=headers, timeout=10)
-
-    r = session.get(url, headers=headers, timeout=60, allow_redirects=True)
-    r.raise_for_status()
-
-    if not is_pdf_response(r):
-        raise ValueError("NOT_PDF")
+    if not looks_like_pdf_response(r):
+        return None, "NOT_PDF_RESPONSE", r.url
 
     with open(path, "wb") as f:
-        f.write(r.content)
+        for chunk in r.iter_content(chunk_size=8192):
+            if chunk:
+                f.write(chunk)
 
-    return r.url
+    return path, "DIRECT", r.url
 
 
-# =====================================================
-# MAIN
-# =====================================================
-def download_pdfs(
-    df,
-    output_dir="outputs/pdfs",
-    report_path="outputs/pdf_download_report.xlsx",
-    delay=1.5,
-):
+def try_html_fallback(url):
+    r = requests.get(url, headers=HEADERS, timeout=25, allow_redirects=True)
+    r.raise_for_status()
+
+    pdf_url = extract_pdf_from_html(r.text, r.url)
+    if not pdf_url:
+        return None, "HTML_NO_PDF"
+
+    return pdf_url, "HTML_EXTRACTED"
+
+
+def download_pdfs(df, output_dir="outputs/pdfs", report_path="outputs/pdf_download_report.xlsx", delay=1.5):
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
 
@@ -92,8 +85,8 @@ def download_pdfs(
 
         if not url or not isinstance(url, str):
             record["download_status"] = "skipped"
-            record["resolved_pdf_url"] = None
-            record["failure_reason"] = "NO_URL"
+            record["resolved_pdf_url"] = "NO_URL"
+            record["failure_reason"] = "Missing PDF link"
             results.append(record)
             st.warning(f"⚠ Skipped: {title}")
             continue
@@ -102,49 +95,43 @@ def download_pdfs(
         path = os.path.join(output_dir, fname)
 
         try:
-            # -------------------------------------------------
-            # 1️⃣ DIRECT DOWNLOAD
-            # -------------------------------------------------
-            resolved_url = download_binary(url, path)
+            # ---------- 1️⃣ DIRECT DOWNLOAD FIRST ----------
+            direct_path, mode, final_url = try_direct_download(url, path)
+            if direct_path:
+                record["download_status"] = "success"
+                record["resolved_pdf_url"] = final_url
+                record["failure_reason"] = mode
+                downloaded_paths.append(path)
+                results.append(record)
+                st.success(f"✅ Downloaded: {title}")
+                sleep(delay)
+                continue
+
+            # ---------- 2️⃣ HTML FALLBACK ----------
+            pdf_url, reason = try_html_fallback(url)
+            if not pdf_url:
+                raise Exception(reason)
+
+            direct_path, mode, final_url = try_direct_download(pdf_url, path)
+            if not direct_path:
+                raise Exception("FALLBACK_PDF_DOWNLOAD_FAILED")
 
             record["download_status"] = "success"
-            record["resolved_pdf_url"] = resolved_url
-            record["failure_reason"] = "DIRECT"
-
+            record["resolved_pdf_url"] = final_url
+            record["failure_reason"] = mode
             downloaded_paths.append(path)
-            st.success(f"✅ Downloaded (direct): {title}")
+            st.success(f"✅ Downloaded (HTML): {title}")
 
-        except Exception:
-            try:
-                # -------------------------------------------------
-                # 2️⃣ HTML SCRAPE FALLBACK
-                # -------------------------------------------------
-                pdf_url = extract_pdf_from_html(url)
-                if not pdf_url:
-                    raise RuntimeError("HTML_NO_PDF")
-
-                resolved_url = download_binary(pdf_url, path)
-
-                record["download_status"] = "success"
-                record["resolved_pdf_url"] = resolved_url
-                record["failure_reason"] = "HTML_SCRAPE"
-
-                downloaded_paths.append(path)
-                st.success(f"✅ Downloaded (HTML scrape): {title}")
-
-            except Exception as e:
-                record["download_status"] = "failed"
-                record["resolved_pdf_url"] = None
-                record["failure_reason"] = str(e)
-
-                st.error(f"❌ Failed: {title}")
+        except Exception as e:
+            record["download_status"] = "failed"
+            record["resolved_pdf_url"] = None
+            record["failure_reason"] = str(e)
+            st.error(f"❌ Failed: {title} — {e}")
 
         results.append(record)
         sleep(delay)
 
-    # -------------------------------------------------
-    # SAVE REPORT
-    # -------------------------------------------------
+    # ---------- Save report ----------
     report_df = pd.DataFrame(results)
     report_df.to_excel(report_path, index=False)
 
