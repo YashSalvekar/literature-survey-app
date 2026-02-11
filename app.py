@@ -119,17 +119,6 @@ if candidate_df is not None:
 # =====================================================
 st.header("Step 3 — Download PDFs")
 
-pdf_source = st.radio(
-    "Source of paper list",
-    ["From Step 2", "Upload Excel"],
-    horizontal=True,
-)
-
-if pdf_source == "Upload Excel":
-    uploaded_file = st.file_uploader("Upload filtered Excel", type=["xlsx"])
-    if uploaded_file:
-        st.session_state["step2_df"] = pd.read_excel(uploaded_file)
-
 if "step2_df" not in st.session_state:
     st.warning("No filtered dataset available.")
 else:
@@ -137,7 +126,7 @@ else:
 
     if st.button("📥 Download PDFs"):
         with st.spinner("Downloading PDFs..."):
-            pdf_paths = download_pdfs(st.session_state["step2_df"])
+            pdf_paths = download_pdfs(st.session_state["step2_df"], output_dir=PDF_DIR)
             st.session_state["downloaded_pdfs"] = pdf_paths
 
     if "downloaded_pdfs" in st.session_state and st.session_state["downloaded_pdfs"]:
@@ -206,6 +195,7 @@ else:
             file_name="paper_summaries.zip",
             mime="application/zip",
         )
+
 
 
 
