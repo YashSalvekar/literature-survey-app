@@ -23,7 +23,7 @@ def session_headers():
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
         ),
-        "Accept": "application/pdf",
+        "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://www.google.com/",
     }
@@ -43,20 +43,27 @@ def classify_failure(url):
     return "OTHER"
 
 
+def looks_like_pdf(resp):
+    ct = resp.headers.get("Content-Type", "").lower()
+    if "pdf" in ct:
+        return True
+    # fallback: PDF magic bytes
+    return resp.content[:5] == b"%PDF-"
+
+
 # =====================================================
 # DOWNLOAD METHODS
 # =====================================================
-def download_pdf_direct(url, filepath):
+def download_pdf_relaxed(url, filepath):
     session = requests.Session()
     headers = session_headers()
 
-    # warmup
     session.get("https://www.google.com", headers=headers, timeout=10)
 
     r = session.get(url, headers=headers, timeout=60, allow_redirects=True)
     r.raise_for_status()
 
-    if "pdf" not in r.headers.get("Content-Type", "").lower():
+    if not looks_like_pdf(r):
         raise ValueError("NOT_PDF")
 
     with open(filepath, "wb") as f:
@@ -76,33 +83,6 @@ def extract_pdf_from_html(url):
     return urljoin(url, pdf_links[0])
 
 
-# Optional selenium fallback (only if enabled)
-def selenium_download(url, filepath):
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-gpu")
-
-    driver = webdriver.Chrome(options=options)
-    driver.get(url)
-    time.sleep(5)
-
-    links = driver.find_elements(By.XPATH, "//a[contains(@href,'.pdf')]")
-    if not links:
-        driver.quit()
-        raise RuntimeError("NO_PDF_FOUND")
-
-    pdf_url = links[0].get_attribute("href")
-    driver.quit()
-
-    resolved = download_pdf_direct(pdf_url, filepath)
-    return resolved
-
-
 # =====================================================
 # MAIN STREAMLIT FUNCTION
 # =====================================================
@@ -110,8 +90,7 @@ def download_pdfs(
     df,
     output_dir="outputs/pdfs",
     report_path="outputs/pdf_download_report.xlsx",
-    delay=1.5,
-    use_selenium=False,
+    delay=1.2,
 ):
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
@@ -144,8 +123,8 @@ def download_pdfs(
         path = os.path.join(output_dir, fname)
 
         try:
-            # ---------- 1️⃣ Direct PDF ----------
-            resolved = download_pdf_direct(url, path)
+            # ---------- 1️⃣ Direct / relaxed ----------
+            resolved = download_pdf_relaxed(url, path)
 
             record["download_status"] = "success"
             record["resolved_pdf_url"] = resolved
@@ -161,7 +140,7 @@ def download_pdfs(
                 if not pdf_url:
                     raise Exception("HTML_NO_PDF")
 
-                resolved = download_pdf_direct(pdf_url, path)
+                resolved = download_pdf_relaxed(pdf_url, path)
 
                 record["download_status"] = "success"
                 record["resolved_pdf_url"] = resolved
@@ -170,37 +149,16 @@ def download_pdfs(
                 downloaded_paths.append(path)
                 st.success(f"✅ Downloaded (HTML): {title}")
 
-            except Exception:
-                if use_selenium:
-                    try:
-                        # ---------- 3️⃣ Selenium fallback ----------
-                        resolved = selenium_download(url, path)
+            except Exception as e:
+                record["download_status"] = "failed"
+                record["resolved_pdf_url"] = None
+                record["failure_reason"] = classify_failure(url)
 
-                        record["download_status"] = "success"
-                        record["resolved_pdf_url"] = resolved
-                        record["failure_reason"] = "SELENIUM"
-
-                        downloaded_paths.append(path)
-                        st.success(f"✅ Downloaded (Selenium): {title}")
-
-                    except Exception:
-                        record["download_status"] = "failed"
-                        record["resolved_pdf_url"] = None
-                        record["failure_reason"] = classify_failure(url)
-                        st.error(f"❌ Failed: {title}")
-
-                else:
-                    record["download_status"] = "failed"
-                    record["resolved_pdf_url"] = None
-                    record["failure_reason"] = classify_failure(url)
-                    st.error(f"❌ Failed: {title}")
+                st.error(f"❌ Failed: {title} — {record['failure_reason']}")
 
         results.append(record)
         time.sleep(delay)
 
-    # =====================================================
-    # SAVE REPORT
-    # =====================================================
     report_df = pd.DataFrame(results)
     report_df.to_excel(report_path, index=False)
 
