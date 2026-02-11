@@ -129,8 +129,8 @@ else:
             pdf_paths, report_df = download_pdfs(
                 st.session_state["step2_df"],
                 output_dir=PDF_DIR,
-                report_path="outputs/pdf_download_report.xlsx",
-                 use_selenium=False,   # turn True only if needed
+                report_path="outputs/pdf_download_report.xlsx"
+                
             )
             st.session_state["downloaded_pdfs"] = pdf_paths
             st.session_state["download_report_df"] = report_df
@@ -231,6 +231,7 @@ else:
             file_name="paper_summaries.zip",
             mime="application/zip",
         )
+
 
 
 
