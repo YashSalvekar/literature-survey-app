@@ -126,8 +126,13 @@ else:
 
     if st.button("📥 Download PDFs"):
         with st.spinner("Downloading PDFs..."):
-            pdf_paths = download_pdfs(st.session_state["step2_df"], output_dir=PDF_DIR)
+            pdf_paths, report_df = download_pdfs(
+                st.session_state["step2_df"],
+                output_dir=PDF_DIR,
+                report_path="outputs/pdf_download_report.xlsx"
+            )
             st.session_state["downloaded_pdfs"] = pdf_paths
+            st.session_state["download_report_df"] = report_df
 
     if "downloaded_pdfs" in st.session_state and st.session_state["downloaded_pdfs"]:
         st.success(f"{len(st.session_state['downloaded_pdfs'])} PDFs downloaded.")
@@ -141,6 +146,10 @@ else:
             file_name="downloaded_pdfs.zip",
             mime="application/zip",
         )
+
+    if "download_report_df" in st.session_state:
+        st.subheader("📊 Download Status Report")
+        st.dataframe(st.session_state["download_report_df"], use_container_width=True)
 
 
 # =====================================================
@@ -195,6 +204,7 @@ else:
             file_name="paper_summaries.zip",
             mime="application/zip",
         )
+
 
 
 
