@@ -85,7 +85,7 @@ if source_option == "From Step 1":
     if "step1_df" not in st.session_state:
         st.warning("Run Step 1 first.")
     else:
-        candidate_df = step2_filter_ui(st.session_state["step1_df"])
+        candidate_df = step2_filter_ui(st.session_state["Step1_df"])
 
 # ---------- PREVIEW + COMMIT ----------
 if candidate_df is not None:
@@ -133,7 +133,7 @@ else:
                 
             )
             st.session_state["downloaded_pdfs"] = pdf_paths
-            st.session_state["download_report_df"] = report_df
+            st.session_state["download_report_df"] = Report_df
 
     # -----------------------------
     # Always show download buttons
@@ -231,6 +231,7 @@ else:
             file_name="paper_summaries.zip",
             mime="application/zip",
         )
+
 
 
 
