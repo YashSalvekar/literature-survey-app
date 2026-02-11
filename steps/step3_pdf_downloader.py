@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-    "Accept": "application/pdf,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
+    "Accept": "*/*",
 }
 
 
@@ -18,16 +18,17 @@ def safe_filename(text):
     return "".join(c for c in text if c.isalnum() or c in (" ", "_", "-")).rstrip()
 
 
-def looks_like_pdf_response(resp):
+def is_probably_pdf(resp):
     ctype = resp.headers.get("Content-Type", "").lower()
     return "application/pdf" in ctype or resp.url.lower().endswith(".pdf")
 
 
 def try_direct_download(url, path):
-    r = requests.get(url, headers=HEADERS, timeout=25, stream=True, allow_redirects=True)
+    r = requests.get(url, headers=HEADERS, timeout=30, stream=True, allow_redirects=True)
     r.raise_for_status()
 
-    if not looks_like_pdf_response(r):
+    # Allow HTML first if redirect ends in PDF (Elsevier)
+    if not is_probably_pdf(r):
         return None, "NOT_PDF_RESPONSE", r.url
 
     with open(path, "wb") as f:
@@ -41,29 +42,27 @@ def try_direct_download(url, path):
 def extract_pdf_from_html(html, base_url):
     soup = BeautifulSoup(html, "html.parser")
 
-    # 1️⃣ Meta tag (Elsevier, Springer, Nature)
+    # 1️⃣ Meta tag (Nature, Springer)
     meta = soup.find("meta", attrs={"name": "citation_pdf_url"})
     if meta and meta.get("content"):
         return urljoin(base_url, meta["content"])
 
-    # 2️⃣ Any link/embed containing .pdf
+    # 2️⃣ Any visible PDF link
     for tag in soup.find_all(["a", "iframe", "embed"]):
         href = tag.get("href") or tag.get("src")
         if href and ".pdf" in href.lower():
             return urljoin(base_url, href)
 
-    # 3️⃣ Script-based URLs
-    for script in soup.find_all("script"):
-        if script.string:
-            matches = re.findall(r"https?://[^\s\"']+\.pdf", script.string)
-            if matches:
-                return matches[0]
+    # 3️⃣ Raw text regex
+    matches = re.findall(r"https?://[^\s\"']+\.pdf", html)
+    if matches:
+        return matches[0]
 
     return None
 
 
 def try_html_fallback(url):
-    r = requests.get(url, headers=HEADERS, timeout=25, allow_redirects=True)
+    r = requests.get(url, headers=HEADERS, timeout=30, allow_redirects=True)
     r.raise_for_status()
 
     pdf_url = extract_pdf_from_html(r.text, r.url)
