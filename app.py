@@ -134,22 +134,48 @@ else:
             st.session_state["downloaded_pdfs"] = pdf_paths
             st.session_state["download_report_df"] = report_df
 
-    if "downloaded_pdfs" in st.session_state and st.session_state["downloaded_pdfs"]:
+    # -----------------------------
+    # Always show download buttons
+    # -----------------------------
+    if "downloaded_pdfs" in st.session_state:
+
         st.success(f"{len(st.session_state['downloaded_pdfs'])} PDFs downloaded.")
 
-        zip_buffer = create_zip(
-            {os.path.basename(p): open(p, "rb").read() for p in st.session_state["downloaded_pdfs"]}
-        )
+        # ZIP: PDFs + Excel report
+        files_for_zip = {
+            os.path.basename(p): open(p, "rb").read()
+            for p in st.session_state["downloaded_pdfs"]
+        }
+
+        if "download_report_df" in st.session_state:
+            excel_buffer = io.BytesIO()
+            st.session_state["download_report_df"].to_excel(excel_buffer, index=False)
+            excel_buffer.seek(0)
+            files_for_zip["pdf_download_report.xlsx"] = excel_buffer.read()
+
+        zip_buffer = create_zip(files_for_zip)
+
         st.download_button(
-            "⬇ Download All PDFs (ZIP)",
+            "⬇ Download PDFs + Report (ZIP)",
             data=zip_buffer,
-            file_name="downloaded_pdfs.zip",
+            file_name="pdfs_and_report.zip",
             mime="application/zip",
+            key="zip_download"
         )
 
-    if "download_report_df" in st.session_state:
-        st.subheader("📊 Download Status Report")
-        st.dataframe(st.session_state["download_report_df"], use_container_width=True)
+        # Excel-only download
+        if "download_report_df" in st.session_state:
+            excel_buffer = io.BytesIO()
+            st.session_state["download_report_df"].to_excel(excel_buffer, index=False)
+            excel_buffer.seek(0)
+
+            st.download_button(
+                "⬇ Download Download Report (Excel)",
+                data=excel_buffer,
+                file_name="pdf_download_report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="excel_download"
+            )
 
 
 # =====================================================
@@ -204,6 +230,7 @@ else:
             file_name="paper_summaries.zip",
             mime="application/zip",
         )
+
 
 
 
