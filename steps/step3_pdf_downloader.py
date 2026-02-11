@@ -1,5 +1,4 @@
 import os
-import re
 import requests
 import streamlit as st
 import pandas as pd
@@ -23,20 +22,6 @@ def looks_like_pdf_response(resp):
     return "application/pdf" in ctype or resp.url.lower().endswith(".pdf")
 
 
-def extract_pdf_from_html(html, base_url):
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Common cases
-    for tag in soup.find_all(["a", "iframe", "embed"]):
-        href = tag.get("href") or tag.get("src")
-        if not href:
-            continue
-        if ".pdf" in href.lower():
-            return urljoin(base_url, href)
-
-    return None
-
-
 def try_direct_download(url, path):
     r = requests.get(url, headers=HEADERS, timeout=25, stream=True, allow_redirects=True)
     r.raise_for_status()
@@ -50,6 +35,30 @@ def try_direct_download(url, path):
                 f.write(chunk)
 
     return path, "DIRECT", r.url
+
+
+def extract_pdf_from_html(html, base_url):
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 1️⃣ Meta tag (Elsevier, Springer, Nature, etc.)
+    meta = soup.find("meta", attrs={"name": "citation_pdf_url"})
+    if meta and meta.get("content"):
+        return urljoin(base_url, meta["content"])
+
+    # 2️⃣ Any link/embed containing .pdf
+    for tag in soup.find_all(["a", "iframe", "embed"]):
+        href = tag.get("href") or tag.get("src")
+        if href and ".pdf" in href.lower():
+            return urljoin(base_url, href)
+
+    # 3️⃣ Script-based URLs
+    for script in soup.find_all("script"):
+        if script.string:
+            matches = re.findall(r"https?://[^\s\"']+\.pdf", script.string)
+            if matches:
+                return matches[0]
+
+    return None
 
 
 def try_html_fallback(url):
@@ -95,7 +104,7 @@ def download_pdfs(df, output_dir="outputs/pdfs", report_path="outputs/pdf_downlo
         path = os.path.join(output_dir, fname)
 
         try:
-            # ---------- 1️⃣ DIRECT DOWNLOAD FIRST ----------
+            # ---------- 1️⃣ Direct download ----------
             direct_path, mode, final_url = try_direct_download(url, path)
             if direct_path:
                 record["download_status"] = "success"
@@ -107,7 +116,7 @@ def download_pdfs(df, output_dir="outputs/pdfs", report_path="outputs/pdf_downlo
                 sleep(delay)
                 continue
 
-            # ---------- 2️⃣ HTML FALLBACK ----------
+            # ---------- 2️⃣ HTML fallback ----------
             pdf_url, reason = try_html_fallback(url)
             if not pdf_url:
                 raise Exception(reason)
@@ -131,7 +140,6 @@ def download_pdfs(df, output_dir="outputs/pdfs", report_path="outputs/pdf_downlo
         results.append(record)
         sleep(delay)
 
-    # ---------- Save report ----------
     report_df = pd.DataFrame(results)
     report_df.to_excel(report_path, index=False)
 
