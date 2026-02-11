@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 import streamlit as st
 import pandas as pd
@@ -40,7 +41,7 @@ def try_direct_download(url, path):
 def extract_pdf_from_html(html, base_url):
     soup = BeautifulSoup(html, "html.parser")
 
-    # 1️⃣ Meta tag (Elsevier, Springer, Nature, etc.)
+    # 1️⃣ Meta tag (Elsevier, Springer, Nature)
     meta = soup.find("meta", attrs={"name": "citation_pdf_url"})
     if meta and meta.get("content"):
         return urljoin(base_url, meta["content"])
@@ -104,7 +105,7 @@ def download_pdfs(df, output_dir="outputs/pdfs", report_path="outputs/pdf_downlo
         path = os.path.join(output_dir, fname)
 
         try:
-            # ---------- 1️⃣ Direct download ----------
+            # ---------- 1️⃣ Direct ----------
             direct_path, mode, final_url = try_direct_download(url, path)
             if direct_path:
                 record["download_status"] = "success"
