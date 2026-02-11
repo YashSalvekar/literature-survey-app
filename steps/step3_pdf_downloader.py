@@ -1,26 +1,51 @@
+import os
 import requests
 import streamlit as st
+from time import sleep
 
 
-def download_pdfs(df):
-    st.subheader("Step 3 — Download PDFs")
+def safe_filename(text):
+    return "".join(c for c in text if c.isalnum() or c in (" ", "_", "-")).rstrip()
 
-    downloaded_files = {}
 
-    for _, row in df.iterrows():
-        title = row.get("title", "paper").replace("/", "_")
-        url = row.get("pdf_url")
+def download_pdfs(df, output_dir="outputs/pdfs", delay=1.5):
+    os.makedirs(output_dir, exist_ok=True)
 
-        if not url:
+    st.subheader("📥 Step 3 — Download PDFs")
+
+    downloaded_paths = []
+    progress = st.progress(0)
+
+    total = len(df)
+
+    for i, (_, row) in enumerate(df.iterrows(), start=1):
+        title = row.get("Paper Title", "paper")
+        url = row.get("PDF Link")
+
+        progress.progress(i / total)
+
+        if not url or not isinstance(url, str):
+            st.warning(f"⚠ No PDF link: {title}")
             continue
 
-        try:
-            resp = requests.get(url, timeout=15)
-            resp.raise_for_status()
-            downloaded_files[f"{title}.pdf"] = resp.content
-            st.success(f"Downloaded: {title}")
-        except Exception as e:
-            st.warning(f"Failed: {title} — {e}")
+        fname = safe_filename(title)[:120] + ".pdf"
+        path = os.path.join(output_dir, fname)
 
-    st.session_state["downloaded_pdfs"] = downloaded_files
-    return downloaded_files
+        try:
+            r = requests.get(url, timeout=20, stream=True)
+            r.raise_for_status()
+
+            with open(path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            downloaded_paths.append(path)
+            st.success(f"✅ Downloaded: {title}")
+
+        except Exception as e:
+            st.error(f"❌ Failed: {title} — {e}")
+
+        sleep(delay)
+
+    return downloaded_paths
