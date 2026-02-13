@@ -221,11 +221,16 @@ Content:
 # WORD EXPORT (PROFESSIONAL STYLE)
 # ==============================
 def save_summary_to_word(summary_text, output_path):
+    from docx import Document
+    from docx.shared import Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Inches
+    import re
+
     doc = Document()
 
-    # Margins
-    sections = doc.sections
-    for section in sections:
+    # Set margins
+    for section in doc.sections:
         section.top_margin = Inches(1)
         section.bottom_margin = Inches(1)
         section.left_margin = Inches(1)
@@ -236,29 +241,38 @@ def save_summary_to_word(summary_text, output_path):
     for line in lines:
         stripped = line.strip()
 
+        # Skip completely empty lines safely
+        if not stripped:
+            doc.add_paragraph("")  # keep spacing
+            continue
+
+        # TITLE
         if stripped.startswith("Title:"):
-            p = doc.add_paragraph(stripped)
+            p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.runs[0]
+            run = p.add_run(stripped)
             run.bold = True
             run.font.size = Pt(16)
 
+        # AUTHORS
         elif stripped.startswith("Authors:"):
-            p = doc.add_paragraph(stripped)
+            p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.runs[0]
+            run = p.add_run(stripped)
             run.italic = True
             run.font.size = Pt(11)
 
+        # SECTION HEADERS (1. Background etc.)
         elif re.match(r"^\d+\.", stripped):
-            p = doc.add_paragraph(stripped)
-            run = p.runs[0]
+            p = doc.add_paragraph()
+            run = p.add_run(stripped)
             run.bold = True
             run.font.size = Pt(12)
 
+        # NORMAL TEXT
         else:
-            p = doc.add_paragraph(stripped)
-            run = p.runs[0]
+            p = doc.add_paragraph()
+            run = p.add_run(stripped)
             run.font.size = Pt(11)
 
     doc.save(output_path)
@@ -293,6 +307,7 @@ def summarize_pdfs(pdf_files, output_dir):
         output_files.append(output_path)
 
     return create_zip(output_files)
+
 
 
 
