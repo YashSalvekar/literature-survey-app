@@ -191,19 +191,12 @@ pdf_source = st.radio(
 
 pdf_files = None
 
-# -----------------------------------------------------
-# OPTION 1: Use PDFs from Step 3
-# -----------------------------------------------------
 if pdf_source == "From Step 3 Downloads":
-    if "downloaded_pdfs" in st.session_state and st.session_state["downloaded_pdfs"]:
-        pdf_files = {}
-        for path in st.session_state["downloaded_pdfs"]:
-            with open(path, "rb") as f:
-                pdf_files[os.path.basename(path)] = f.read()
-
-# -----------------------------------------------------
-# OPTION 2: Upload PDFs manually
-# -----------------------------------------------------
+    if "downloaded_pdfs" in st.session_state:
+        pdf_files = {
+            os.path.basename(p): open(p, "rb").read()
+            for p in st.session_state["downloaded_pdfs"]
+        }
 else:
     uploaded_pdfs = st.file_uploader(
         "Upload one or more PDFs",
@@ -213,39 +206,29 @@ else:
     if uploaded_pdfs:
         pdf_files = {f.name: f.read() for f in uploaded_pdfs}
 
-# -----------------------------------------------------
-# VALIDATION
-# -----------------------------------------------------
 if not pdf_files:
     st.warning("No PDFs available.")
 else:
     st.success(f"{len(pdf_files)} PDFs ready for summarization.")
 
     if st.button("🧠 Generate Summaries"):
-        with st.spinner("Generating summaries... This may take a few minutes depending on PDF size."):
-            try:
-                summaries = summarize_pdfs(
-                    pdf_files=pdf_files,
-                    output_dir=SUMMARY_DIR,
-                )
-                st.session_state["summaries"] = summaries
-                st.success("Summaries generated successfully!")
+        with st.spinner("Generating summaries..."):
+            summaries = summarize_pdfs(pdf_files, output_dir=SUMMARY_DIR)
+            st.session_state["summaries"] = summaries
 
-            except Exception as e:
-                st.error(f"Error during summarization: {e}")
+    if "summaries" in st.session_state:
+        for fname, text in st.session_state["summaries"].items():
+            st.subheader(fname)
+            st.text_area("Summary", text, height=280)
 
-# -----------------------------------------------------
-# DOWNLOAD SECTION
-# -----------------------------------------------------
-if "summaries" in st.session_state and st.session_state["summaries"]:
+        zip_buffer = create_zip(st.session_state["summaries"])
 
-    st.markdown("### 📦 Download Results")
+        st.download_button(
+            "⬇ Download All Summaries (ZIP)",
+            data=zip_buffer,
+            file_name="paper_summaries.zip",
+            mime="application/zip",
+        )
 
-    zip_buffer = create_zip(st.session_state["summaries"])
-
-    st.download_button(
-        "⬇ Download All Summaries (ZIP)",
-        data=zip_buffer,
-        file_name="paper_summaries.zip",
-        mime="application/zip",
     )
+
