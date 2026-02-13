@@ -1,269 +1,296 @@
-import os
-import time
-import re
 import fitz
-import streamlit as st
+import re
+import os
 from groq import Groq
-
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.shared import Inches
+from utils.file_utils import create_zip
 
-# ==========================================================
+
+# ==============================
 # CONFIG
-# ==========================================================
-MODEL_NAME = "llama-3.1-8b-instant"
+# ==============================
+MODEL_NAME = "llama3-70b-8192"
+CHUNK_SIZE = 3500
+REDUCE_BATCH_SIZE = 3
 
-TPM_LIMIT = 6000
-TPM_BUFFER = 600
-CHARS_PER_TOKEN = 4
 
-CHUNK_INPUT_TOKENS = 2000
-MAX_OUTPUT_TOKENS_CHUNK = 300
-MAX_OUTPUT_TOKENS_INTERMEDIATE = 400
-MAX_OUTPUT_TOKENS_FINAL = 800
+# ==============================
+# TEXT EXTRACTION
+# ==============================
+def extract_text_from_pdf_bytes(pdf_bytes):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    full_text = ""
+    for page in doc:
+        full_text += page.get_text()
+    return full_text
 
-MAX_CHARS_PER_CHUNK = CHUNK_INPUT_TOKENS * CHARS_PER_TOKEN
 
-TOKENS_USED = 0
-WINDOW_START = time.time()
+def chunk_text(text, chunk_size=CHUNK_SIZE):
+    return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
-# ==========================================================
-# TOKEN GUARD
-# ==========================================================
-def estimate_tokens(text):
-    return max(1, len(text) // CHARS_PER_TOKEN)
 
-def tpm_guard(estimated_tokens):
-    global TOKENS_USED, WINDOW_START
-
-    now = time.time()
-    elapsed = now - WINDOW_START
-
-    if elapsed >= 60:
-        TOKENS_USED = 0
-        WINDOW_START = now
-
-    if TOKENS_USED + estimated_tokens > (TPM_LIMIT - TPM_BUFFER):
-        sleep_time = max(1, 60 - elapsed)
-        time.sleep(sleep_time)
-        TOKENS_USED = 0
-        WINDOW_START = time.time()
-
-    TOKENS_USED += estimated_tokens
-
-# ==========================================================
-# METADATA (Simple but Stable for Streamlit)
-# ==========================================================
+# ==============================
+# TITLE & AUTHOR EXTRACTION
+# ==============================
 def extract_title_and_authors_from_bytes(pdf_bytes):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     page = doc[0]
-    text = page.get_text()
-    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    blocks = page.get_text("dict")["blocks"]
 
-    title = lines[0] if lines else "Unknown Title"
-    authors = lines[1] if len(lines) > 1 else "Not explicitly detected"
+    rows = []
+    for b in blocks:
+        if "lines" not in b:
+            continue
+
+        text = " ".join(
+            span["text"]
+            for line in b["lines"]
+            for span in line["spans"]
+        ).strip()
+
+        if not text:
+            continue
+
+        max_font = max(
+            span["size"]
+            for line in b["lines"]
+            for span in line["spans"]
+        )
+
+        y0 = b["bbox"][1]
+        rows.append((text, max_font, y0))
+
+    rows.sort(key=lambda x: x[2])
+    page_height = page.rect.height
+
+    candidates = []
+
+    for text, size, y in rows:
+        if y > page_height * 0.45:
+            break
+
+        tl = text.lower()
+        wc = len(text.split())
+
+        if re.search(r"(received|accepted|published|submitted)", tl):
+            continue
+        if wc <= 5 and "&" in text:
+            continue
+        if wc <= 5 and text.istitle():
+            continue
+        if wc <= 6 and re.search(r"(journal|letters|review|transactions|proceedings)", tl):
+            continue
+        if tl.startswith("and "):
+            continue
+        if wc <= 2:
+            continue
+
+        candidates.append((text, size))
+
+    if candidates:
+        raw_title = sorted(candidates, key=lambda x: (-x[1], -len(x[0])))[0][0]
+    else:
+        raw_title = rows[0][0]
+
+    title = re.sub(r"\s+", " ", raw_title).strip()
+
+    authors = "Not explicitly detected"
+    title_seen = False
+
+    for text, _, _ in rows:
+        if title in text:
+            title_seen = True
+            continue
+
+        if not title_seen:
+            continue
+
+        clean = text.strip()
+        cl = clean.lower()
+
+        if re.search(r"(doi|abstract|keywords)", cl):
+            continue
+        if re.search(r"\b(19|20)\d{2}\b", clean):
+            continue
+        if clean.count(",") == 0 and " and " not in cl:
+            continue
+
+        if 5 <= len(clean) <= 200:
+            authors = clean
+            break
 
     return title, authors
 
-# ==========================================================
-# TEXT EXTRACTION
-# ==========================================================
-def extract_pdf_text_from_bytes(pdf_bytes):
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    return "\n".join(page.get_text() for page in doc).strip()
 
-def chunk_text(text):
-    return [
-        text[i:i + MAX_CHARS_PER_CHUNK]
-        for i in range(0, len(text), MAX_CHARS_PER_CHUNK)
-    ]
-
-# ==========================================================
-# LLM STAGES (MAP → REDUCE → FINAL)
-# ==========================================================
+# ==============================
+# LLM CALLS
+# ==============================
 def summarize_chunk(client, chunk):
     prompt = f"""
-Extract concise factual technical notes from the text below.
+You are analyzing a research paper.
 
-Rules:
-- Only extract information explicitly stated
-- No title, no conclusions
-- No interpretation
-- Avoid repetition
-- Compact bullet-style notes
+Extract key technical insights from the following text.
+Focus on:
+- Problem Statement
+- Methodology
+- Models/Algorithms
+- Datasets
+- Evaluation Metrics
+- Key Findings
+- Limitations
 
 Text:
 {chunk}
 """
-    est = estimate_tokens(chunk) + MAX_OUTPUT_TOKENS_CHUNK
-    tpm_guard(est)
 
     response = client.chat.completions.create(
         model=MODEL_NAME,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
-        max_tokens=MAX_OUTPUT_TOKENS_CHUNK
     )
 
-    return response.choices[0].message.content.strip()
+    return response.choices[0].message.content
 
-def reduce_notes(client, notes):
-    batch = "\n".join(notes)
 
-    prompt = f"""
-Condense the following technical notes into a compact factual summary.
-Do NOT add new information.
+def reduce_notes_in_batches(client, notes, batch_size=REDUCE_BATCH_SIZE):
+    reduced_batches = []
+
+    for i in range(0, len(notes), batch_size):
+        batch = "\n\n".join(notes[i:i + batch_size])
+
+        prompt = f"""
+Consolidate the following extracted notes into a structured technical summary.
+
+Remove repetition.
+Preserve important findings.
+Keep it concise but complete.
 
 Notes:
 {batch}
 """
-    est = estimate_tokens(batch) + MAX_OUTPUT_TOKENS_INTERMEDIATE
-    tpm_guard(est)
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-        max_tokens=MAX_OUTPUT_TOKENS_INTERMEDIATE
-    )
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
 
-    return response.choices[0].message.content.strip()
+        reduced_batches.append(response.choices[0].message.content)
 
-def generate_one_pager(client, title, authors, notes):
+    if len(reduced_batches) == 1:
+        return reduced_batches[0]
+
+    return reduce_notes_in_batches(client, reduced_batches, batch_size)
+
+
+def generate_one_pager(client, title, authors, reduced_notes):
     prompt = f"""
-You are an expert scientific reviewer.
+Generate a professional 1-page research summary in the following format:
 
-STRICT RULES:
-- Use ONLY provided content
-- Do not hallucinate
-- Keep concise and factual
-- Professional academic tone
+Title: {title}
+Authors: {authors}
 
-Title:
-{title}
+1. Background
+2. Objective
+3. Methodology
+4. Key Results
+5. Strengths
+6. Limitations
+7. Future Scope
+8. Reference (Include authors and year if mentioned in paper)
 
-References:
-{authors}
-
-Generate a structured 1-page summary with clean section headers.
-
-CONTENT:
-{notes}
+Content:
+{reduced_notes}
 """
-    est = estimate_tokens(notes) + MAX_OUTPUT_TOKENS_FINAL
-    tpm_guard(est)
 
     response = client.chat.completions.create(
         model=MODEL_NAME,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
-        max_tokens=MAX_OUTPUT_TOKENS_FINAL
     )
 
-    return response.choices[0].message.content.strip()
+    return response.choices[0].message.content
 
-# ==========================================================
-# PROFESSIONAL WORD STYLING
-# ==========================================================
-def style_document(doc):
-    section = doc.sections[0]
 
-    # Margins (1 inch all sides)
-    section.top_margin = Inches(1)
-    section.bottom_margin = Inches(1)
-    section.left_margin = Inches(1)
-    section.right_margin = Inches(1)
-
-    style = doc.styles["Normal"]
-    font = style.font
-    font.name = "Times New Roman"
-    font.size = Pt(12)
-
-def add_paragraph_with_spacing(doc, text):
-    p = doc.add_paragraph(text)
-    p.paragraph_format.space_after = Pt(6)
-    p.paragraph_format.line_spacing = 1.15
-    return p
-
-def save_word_professional(text, output_path):
+# ==============================
+# WORD EXPORT (PROFESSIONAL STYLE)
+# ==============================
+def save_summary_to_word(summary_text, output_path):
     doc = Document()
-    style_document(doc)
 
-    lines = text.split("\n")
+    # Margins
+    sections = doc.sections
+    for section in sections:
+        section.top_margin = Inches(1)
+        section.bottom_margin = Inches(1)
+        section.left_margin = Inches(1)
+        section.right_margin = Inches(1)
+
+    lines = summary_text.split("\n")
 
     for line in lines:
         stripped = line.strip()
 
-        if not stripped:
-            continue
-
-        # Title formatting
         if stripped.startswith("Title:"):
-            title_text = stripped.replace("Title:", "").strip()
-            h = doc.add_heading(title_text, level=0)
-            h.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            continue
+            p = doc.add_paragraph(stripped)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = p.runs[0]
+            run.bold = True
+            run.font.size = Pt(16)
 
-        # Section headers
-        if stripped.endswith(":"):
-            h = doc.add_heading(stripped, level=2)
-            continue
+        elif stripped.startswith("Authors:"):
+            p = doc.add_paragraph(stripped)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = p.runs[0]
+            run.italic = True
+            run.font.size = Pt(11)
 
-        # Bullet points
-        if stripped.startswith("-") or stripped.startswith("•"):
-            p = doc.add_paragraph(stripped[1:].strip(), style="List Bullet")
-            p.paragraph_format.space_after = Pt(4)
-            continue
+        elif re.match(r"^\d+\.", stripped):
+            p = doc.add_paragraph(stripped)
+            run = p.runs[0]
+            run.bold = True
+            run.font.size = Pt(12)
 
-        # Normal paragraph
-        add_paragraph_with_spacing(doc, stripped)
+        else:
+            p = doc.add_paragraph(stripped)
+            run = p.runs[0]
+            run.font.size = Pt(11)
 
     doc.save(output_path)
 
-# ==========================================================
-# STREAMLIT ENTRY POINT
-# ==========================================================
-def summarize_pdfs(pdf_files, output_dir="outputs/summaries"):
-    os.makedirs(output_dir, exist_ok=True)
 
-    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+# ==============================
+# MAIN ENTRY FUNCTION (STREAMLIT CALL)
+# ==============================
+def summarize_pdfs(uploaded_files, groq_api_key):
+    client = Groq(api_key=groq_api_key)
 
-    summaries = {}
-    progress = st.progress(0)
-    total = len(pdf_files)
+    output_files = []
 
-    for i, (fname, pdf_bytes) in enumerate(pdf_files.items(), start=1):
-        progress.progress(i / total)
+    for file in uploaded_files:
+        pdf_bytes = file.read()
 
-        try:
-            raw_text = extract_pdf_text_from_bytes(pdf_bytes)
+        title, authors = extract_title_and_authors_from_bytes(pdf_bytes)
 
-            if len(raw_text) < 3000:
-                st.warning(f"Skipping {fname} (too short)")
-                continue
+        text = extract_text_from_pdf_bytes(pdf_bytes)
+        chunks = chunk_text(text)
 
-            title, authors = extract_title_and_authors_from_bytes(pdf_bytes)
+        notes = []
+        for chunk in chunks:
+            notes.append(summarize_chunk(client, chunk))
 
-            chunks = chunk_text(raw_text)
-            notes = [summarize_chunk(client, c) for c in chunks]
-            reduced = reduce_notes(client, notes)
+        reduced = reduce_notes_in_batches(client, notes)
+        final_summary = generate_one_pager(client, title, authors, reduced)
 
-            one_pager = generate_one_pager(client, title, authors, reduced)
+        output_path = f"summaries/{title[:50].replace('/', '')}.docx"
+        os.makedirs("summaries", exist_ok=True)
 
-            output_path = os.path.join(
-                output_dir,
-                fname.replace(".pdf", "_one_pager.docx")
-            )
+        save_summary_to_word(final_summary, output_path)
+        output_files.append(output_path)
 
-            save_word_professional(one_pager, output_path)
-
-            summaries[fname] = one_pager
-            st.success(f"✅ Completed: {fname}")
-
-        except Exception as e:
-            st.error(f"❌ Failed: {fname} — {e}")
-
-    return summaries
+    return create_zip(output_files)
