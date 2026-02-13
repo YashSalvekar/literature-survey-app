@@ -272,8 +272,7 @@ def summarize_pdfs(pdf_files, output_dir):
 
     output_files = []
 
-    for file in pdf_files:
-        pdf_bytes = file.read()
+    for filename, pdf_bytes in pdf_files.items():
 
         title, authors = extract_title_and_authors_from_bytes(pdf_bytes)
 
@@ -294,5 +293,6 @@ def summarize_pdfs(pdf_files, output_dir):
         output_files.append(output_path)
 
     return create_zip(output_files)
+
 
 
