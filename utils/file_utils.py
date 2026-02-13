@@ -1,5 +1,24 @@
 import zipfile
 import os
+import io
+
+def create_zip(file_paths):
+    """
+    Accepts a list of file paths and returns a BytesIO zip buffer.
+    """
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for path in file_paths:
+            if os.path.exists(path):
+                zipf.write(path, arcname=os.path.basename(path))
+
+    buffer.seek(0)
+    return buffer
+
+
+'''import zipfile
+import os
 from io import BytesIO
 
 def create_zip(file_paths):
@@ -10,7 +29,7 @@ def create_zip(file_paths):
             zf.write(path, arcname=os.path.basename(path))
 
     zip_buffer.seek(0)
-    return zip_buffer.getvalue()
+    return zip_buffer.getvalue()'''
 
 
 
