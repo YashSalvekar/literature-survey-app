@@ -217,29 +217,29 @@ else:
             summaries = summarize_pdfs(pdf_files, output_dir=SUMMARY_DIR)
             st.session_state["summaries"] = summaries
 
-   if "summaries" in st.session_state:
+    if "summaries" in st.session_state:
     
-    st.markdown("### 📄 Generated Summaries")
+        st.markdown("### 📄 Generated Summaries")
+    
+        for fname, file_bytes in st.session_state["summaries"].items():
+            st.subheader(fname)
+    
+            st.download_button(
+                label=f"⬇ Download {fname}",
+                data=file_bytes,
+                file_name=fname,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
 
-    for fname, file_bytes in st.session_state["summaries"].items():
-        st.subheader(fname)
-
+        # ZIP ALL DOCX FILES
+        zip_buffer = create_zip(st.session_state["summaries"])
+    
         st.download_button(
-            label=f"⬇ Download {fname}",
-            data=file_bytes,
-            file_name=fname,
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "⬇ Download All Summaries (ZIP)",
+            data=zip_buffer,
+            file_name="paper_summaries.zip",
+            mime="application/zip",
         )
 
-    # ZIP ALL DOCX FILES
-    zip_buffer = create_zip(st.session_state["summaries"])
+   
 
-    st.download_button(
-        "⬇ Download All Summaries (ZIP)",
-        data=zip_buffer,
-        file_name="paper_summaries.zip",
-        mime="application/zip",
-    )
-
-
-It is converting the files to .txt format, we just need to change the format,
