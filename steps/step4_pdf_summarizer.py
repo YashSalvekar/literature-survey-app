@@ -267,8 +267,8 @@ def save_summary_to_word(summary_text, output_path):
 # ==============================
 # MAIN ENTRY FUNCTION (STREAMLIT CALL)
 # ==============================
-def summarize_pdfs(uploaded_files, groq_api_key):
-    client = Groq(api_key=groq_api_key)
+def summarize_pdfs(pdf_files, output_dir):
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
     output_files = []
 
@@ -294,3 +294,4 @@ def summarize_pdfs(uploaded_files, groq_api_key):
         output_files.append(output_path)
 
     return create_zip(output_files)
+
