@@ -14,7 +14,7 @@ from utils.file_utils import create_zip
 # ==============================
 # CONFIG
 # ==============================
-MODEL_NAME = "llama3-70b-8192"
+MODEL_NAME = "llama-3.1-8b-instant"
 CHUNK_SIZE = 3500
 REDUCE_BATCH_SIZE = 3
 
@@ -293,6 +293,7 @@ def summarize_pdfs(pdf_files, output_dir):
         output_files.append(output_path)
 
     return create_zip(output_files)
+
 
 
 
