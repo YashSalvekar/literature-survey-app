@@ -30,11 +30,11 @@ st.header("Step 1 — Literature Search")
 
 from datetime import datetime
 
+# 🎯 Inputs
 query = st.text_input("Enter search query")
 
-# 🎯 Dynamic year list
 current_year = datetime.now().year
-year_options = list(range(current_year, 1990, -1))  # Current year → 1991
+year_options = list(range(current_year, 1990, -1))
 
 col1, col2 = st.columns(2)
 
@@ -49,25 +49,37 @@ with col2:
     max_year = st.selectbox(
         "Maximum publication year",
         options=year_options,
-        index=0  # Default = current year
+        index=0
     )
 
-# 🔎 Run Search Button
-if st.button("🔍 Run Search"):
+# =====================================================
+# ✅ LIVE VALIDATION
+# =====================================================
 
-    # 🚨 VALIDATIONS
-    if not query.strip():
-        st.error("Please enter a search query.")
-        st.stop()
+error_message = None
 
-    if min_year > max_year:
-        st.error("Minimum publication year cannot be greater than maximum publication year.")
-        st.stop()
+if not query.strip():
+    error_message = "Search query is required."
+
+elif min_year > max_year:
+    error_message = "Minimum publication year cannot be greater than maximum publication year."
+
+# Show inline error under inputs
+if error_message:
+    st.error(error_message)
+
+# =====================================================
+# 🔍 Run Search (Disabled if invalid)
+# =====================================================
+
+search_disabled = error_message is not None
+
+if st.button("🔍 Run Search", disabled=search_disabled):
 
     with st.spinner("Searching literature sources..."):
         df = run_literature_search(query, min_year=min_year, max_year=max_year)
 
-        # 🔧 SAFETY: handle (df, status) return
+        # 🔧 SAFETY: handle (df, status)
         if isinstance(df, tuple):
             df = df[0]
 
@@ -75,6 +87,7 @@ if st.button("🔍 Run Search"):
 
         path = os.path.join(SEARCH_DIR, "step1_raw_results.xlsx")
         df.to_excel(path, index=False)
+
 
 # =====================================================
 # STEP 2 — FILTER, SELECT, OR UPLOAD
@@ -268,6 +281,7 @@ else:
         )
 
    
+
 
 
 
