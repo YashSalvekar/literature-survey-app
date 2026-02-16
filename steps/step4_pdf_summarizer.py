@@ -9,6 +9,7 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.shared import Inches
 from utils.file_utils import create_zip
+import streamlit as st
 
 
 # ==============================
@@ -319,4 +320,5 @@ def summarize_pdfs(pdf_files, output_dir):
         summaries_dict[output_filename] = buffer.getvalue()
 
     return summaries_dict
+
 
