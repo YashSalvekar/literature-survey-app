@@ -37,6 +37,8 @@ if "query_input" not in st.session_state:
 
 query = st.text_input("Enter search query", key="query_input")
 
+def apply_correction(corrected_text):
+    st.session_state.query_input = corrected_text
 
 # 🔤 Spell Check Suggestion
 # =====================================================
@@ -57,9 +59,11 @@ if query.strip():
         if corrected_query != query:
             st.warning(f"Did you mean: **{corrected_query}** ?")
 
-            if st.button("Apply Correction"):
-                st.session_state.query_input = corrected_query
-                st.rerun()
+            st.button(
+                "Apply Correction",
+                on_click=apply_correction,
+                args=(corrected_query,)
+            )
 
 
 current_year = datetime.now().year
@@ -330,6 +334,7 @@ else:
         )
 
    
+
 
 
 
