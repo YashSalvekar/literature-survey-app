@@ -8,6 +8,8 @@ from steps.step3_pdf_downloader import download_pdfs
 from steps.step4_pdf_summarizer import summarize_pdfs
 from utils.file_utils import create_zip
 from utils.io_helpers import ensure_dir
+import io
+import zipfile
 
 st.set_page_config(page_title="Literature Survey Automation", layout="wide")
 st.title("📚 Literature Survey Automation Platform")
@@ -232,7 +234,18 @@ else:
             )
 
         # ZIP ALL DOCX FILES
-        zip_buffer = create_zip(st.session_state["summaries"])
+        #zip_buffer = create_zip(st.session_state["summaries"])
+        
+        def create_zip_from_dict(files_dict):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+                for fname, fbytes in files_dict.items():
+                    zipf.writestr(fname, fbytes)
+            buffer.seek(0)
+            return buffer
+        
+        zip_buffer = create_zip_from_dict(st.session_state["summaries"])
+
     
         st.download_button(
             "⬇ Download All Summaries (ZIP)",
@@ -242,4 +255,5 @@ else:
         )
 
    
+
 
