@@ -32,15 +32,16 @@ SUMMARY_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "summaries"))
 st.header("Step 1 — Literature Search")
 
 # 🎯 Inputs
-query = st.text_input("Enter search query")
+if "query_input" not in st.session_state:
+    st.session_state.query_input = ""
+
+query = st.text_input("Enter search query", key="query_input")
 
 
 # 🔤 Spell Check Suggestion
 # =====================================================
 
 spell = SpellChecker()
-
-corrected_query = None
 
 if query.strip():
     words = query.split()
@@ -57,7 +58,8 @@ if query.strip():
             st.warning(f"Did you mean: **{corrected_query}** ?")
 
             if st.button("Apply Correction"):
-                query = corrected_query
+                st.session_state.query_input = corrected_query
+                st.rerun()
 
 
 current_year = datetime.now().year
@@ -328,6 +330,7 @@ else:
         )
 
    
+
 
 
 
