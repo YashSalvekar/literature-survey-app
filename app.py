@@ -28,11 +28,42 @@ SUMMARY_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "summaries"))
 # =====================================================
 st.header("Step 1 — Literature Search")
 
-query = st.text_input("Enter search query")
-min_year = st.number_input("Minimum publication year", value=2016, step=1)
-max_year = st.number_input("Maximum publication year", value=2026, step=1)
+from datetime import datetime
 
+query = st.text_input("Enter search query")
+
+# 🎯 Dynamic year list
+current_year = datetime.now().year
+year_options = list(range(current_year, 1990, -1))  # Current year → 1991
+
+col1, col2 = st.columns(2)
+
+with col1:
+    min_year = st.selectbox(
+        "Minimum publication year",
+        options=year_options,
+        index=year_options.index(2016) if 2016 in year_options else 0
+    )
+
+with col2:
+    max_year = st.selectbox(
+        "Maximum publication year",
+        options=year_options,
+        index=0  # Default = current year
+    )
+
+# 🔎 Run Search Button
 if st.button("🔍 Run Search"):
+
+    # 🚨 VALIDATIONS
+    if not query.strip():
+        st.error("Please enter a search query.")
+        st.stop()
+
+    if min_year > max_year:
+        st.error("Minimum publication year cannot be greater than maximum publication year.")
+        st.stop()
+
     with st.spinner("Searching literature sources..."):
         df = run_literature_search(query, min_year=min_year, max_year=max_year)
 
@@ -44,24 +75,6 @@ if st.button("🔍 Run Search"):
 
         path = os.path.join(SEARCH_DIR, "step1_raw_results.xlsx")
         df.to_excel(path, index=False)
-
-if "step1_df" in st.session_state:
-    st.success(f"{len(st.session_state['step1_df'])} papers retrieved.")
-    st.dataframe(st.session_state["step1_df"], use_container_width=True)
-
-    # 🔧 FIX: Step 1 download must use step1_df, not step2_df
-    buffer = io.BytesIO()
-    st.session_state["step1_df"].to_excel(buffer, index=False)
-    buffer.seek(0)
-
-    st.download_button(
-        "⬇ Download Step 1 Results (Excel)",
-        data=buffer,
-        file_name="step1_results.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-st.divider()
 
 # =====================================================
 # STEP 2 — FILTER, SELECT, OR UPLOAD
@@ -255,5 +268,6 @@ else:
         )
 
    
+
 
 
