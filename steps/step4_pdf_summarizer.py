@@ -287,9 +287,14 @@ def summarize_pdfs(pdf_files, output_dir):
     pdf_files: Dict[str, bytes]
     returns: Dict[str, bytes]  (docx files)
     """
+    try:
+        api_key = st.secrets["GROQ_API_KEY"]
+    except KeyError:
+        raise ValueError("GROQ_API_KEY not found in Streamlit secrets")
 
+    client = Groq(api_key=api_key)
     #client = Groq(api_key=os.getenv("GROQ_API_KEY")) 
-    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+    #client = Groq(api_key=st.secrets["GROQ_API_KEY"])
     summaries_dict = {}
 
     for filename, pdf_bytes in pdf_files.items():
@@ -320,5 +325,6 @@ def summarize_pdfs(pdf_files, output_dir):
         summaries_dict[output_filename] = buffer.getvalue()
 
     return summaries_dict
+
 
 
