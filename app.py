@@ -10,6 +10,9 @@ from utils.file_utils import create_zip
 from utils.io_helpers import ensure_dir
 import io
 import zipfile
+from spellchecker import SpellChecker
+from datetime import datetime
+
 
 st.set_page_config(page_title="Literature Survey Automation", layout="wide")
 st.title("📚 Literature Survey Automation Platform")
@@ -28,10 +31,34 @@ SUMMARY_DIR = ensure_dir(os.path.join(BASE_OUTPUT_DIR, "summaries"))
 # =====================================================
 st.header("Step 1 — Literature Search")
 
-from datetime import datetime
-
 # 🎯 Inputs
 query = st.text_input("Enter search query")
+
+
+# 🔤 Spell Check Suggestion
+# =====================================================
+
+spell = SpellChecker()
+
+corrected_query = None
+
+if query.strip():
+    words = query.split()
+    misspelled = spell.unknown(words)
+
+    if misspelled:
+        corrected_words = [
+            spell.correction(word) if word in misspelled else word
+            for word in words
+        ]
+        corrected_query = " ".join(corrected_words)
+
+        if corrected_query != query:
+            st.warning(f"Did you mean: **{corrected_query}** ?")
+
+            if st.button("Apply Correction"):
+                query = corrected_query
+
 
 current_year = datetime.now().year
 year_options = list(range(current_year, 1990, -1))
@@ -88,6 +115,23 @@ if st.button("🔍 Run Search", disabled=search_disabled):
         path = os.path.join(SEARCH_DIR, "step1_raw_results.xlsx")
         df.to_excel(path, index=False)
 
+if "step1_df" in st.session_state:
+    st.success(f"{len(st.session_state['step1_df'])} papers retrieved.")
+    st.dataframe(st.session_state["step1_df"], use_container_width=True)
+
+    # 🔧 FIX: Step 1 download must use step1_df, not step2_df
+    buffer = io.BytesIO()
+    st.session_state["step1_df"].to_excel(buffer, index=False)
+    buffer.seek(0)
+
+    st.download_button(
+        "⬇ Download Step 1 Results (Excel)",
+        data=buffer,
+        file_name="step1_results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+st.divider()
 
 # =====================================================
 # STEP 2 — FILTER, SELECT, OR UPLOAD
@@ -139,6 +183,9 @@ if candidate_df is not None:
             file_name="step2_results.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+
+
 
 
 # =====================================================
@@ -281,6 +328,7 @@ else:
         )
 
    
+
 
 
 
