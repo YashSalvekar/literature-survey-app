@@ -10,3 +10,5 @@ lxml
 xlsxwriter
 openpyxl
 tenacity
+pyspellchecker
+
