@@ -282,9 +282,13 @@ def save_summary_to_word(summary_text, output_path):
 # MAIN ENTRY FUNCTION (STREAMLIT CALL)
 # ==============================
 def summarize_pdfs(pdf_files, output_dir):
-    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    """
+    pdf_files: Dict[str, bytes]
+    returns: Dict[str, bytes]  (docx files)
+    """
 
-    output_files = []
+    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    summaries_dict = {}
 
     for filename, pdf_bytes in pdf_files.items():
 
@@ -300,15 +304,17 @@ def summarize_pdfs(pdf_files, output_dir):
         reduced = reduce_notes_in_batches(client, notes)
         final_summary = generate_one_pager(client, title, authors, reduced)
 
-        output_path = f"summaries/{title[:50].replace('/', '')}.docx"
-        os.makedirs("summaries", exist_ok=True)
+        # Safe filename
+        safe_title = re.sub(r'[\\/*?:"<>|]', "", title)[:60]
+        output_filename = f"{safe_title}.docx"
 
-        save_summary_to_word(final_summary, output_path)
-        output_files.append(output_path)
+        # Save to memory instead of disk
+        from io import BytesIO
+        buffer = BytesIO()
 
-    return create_zip(output_files)
+        doc = Document()
+        save_summary_to_word(final_summary, buffer)
 
+        summaries_dict[output_filename] = buffer.getvalue()
 
-
-
-
+    return summaries_dict
