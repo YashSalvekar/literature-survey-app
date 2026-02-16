@@ -287,44 +287,89 @@ def summarize_pdfs(pdf_files, output_dir):
     pdf_files: Dict[str, bytes]
     returns: Dict[str, bytes]  (docx files)
     """
+
+    import streamlit as st
+    from io import BytesIO
+    import re
+
     try:
         api_key = st.secrets["GROQ_API_KEY"]
     except KeyError:
         raise ValueError("GROQ_API_KEY not found in Streamlit secrets")
 
     client = Groq(api_key=api_key)
-    #client = Groq(api_key=os.getenv("GROQ_API_KEY")) 
-    #client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+
     summaries_dict = {}
 
-    for filename, pdf_bytes in pdf_files.items():
+    total_pdfs = len(pdf_files)
 
+    # 🔹 Overall progress
+    overall_progress = st.progress(0)
+    overall_status = st.empty()
+
+    for pdf_index, (filename, pdf_bytes) in enumerate(pdf_files.items(), start=1):
+
+        overall_status.markdown(
+            f"### 📄 Processing **{filename}** ({pdf_index}/{total_pdfs})"
+        )
+
+        # 🔹 Per-PDF progress
+        pdf_progress = st.progress(0)
+        pdf_status = st.empty()
+
+        # 1️⃣ Extract title & authors
+        pdf_status.info("🔍 Extracting title & authors")
         title, authors = extract_title_and_authors_from_bytes(pdf_bytes)
+        pdf_progress.progress(10)
 
+        # 2️⃣ Extract text
+        pdf_status.info("📄 Extracting text from PDF")
         text = extract_text_from_pdf_bytes(pdf_bytes)
-        chunks = chunk_text(text)
+        pdf_progress.progress(20)
 
+        # 3️⃣ Chunk text
+        chunks = chunk_text(text)
+        total_chunks = len(chunks)
+
+        pdf_status.info(f"🔪 Split into {total_chunks} chunks")
+        pdf_progress.progress(30)
+
+        # 4️⃣ Summarize chunks
         notes = []
-        for chunk in chunks:
+        for i, chunk in enumerate(chunks, start=1):
+            pdf_status.info(f"🧠 Summarizing chunk {i}/{total_chunks}")
             notes.append(summarize_chunk(client, chunk))
 
-        reduced = reduce_notes_in_batches(client, notes)
-        final_summary = generate_one_pager(client, title, authors, reduced)
+            # Progress from 30 → 70
+            pdf_progress.progress(30 + int(40 * i / total_chunks))
 
-        # Safe filename
+        # 5️⃣ Reduce notes
+        pdf_status.info("🧩 Consolidating notes")
+        reduced = reduce_notes_in_batches(client, notes)
+        pdf_progress.progress(80)
+
+        # 6️⃣ Generate final one-pager
+        pdf_status.info("📝 Generating 1-pager summary")
+        final_summary = generate_one_pager(client, title, authors, reduced)
+        pdf_progress.progress(90)
+
+        # 7️⃣ Save Word file to memory
+        pdf_status.info("💾 Creating Word document")
+
         safe_title = re.sub(r'[\\/*?:"<>|]', "", title)[:60]
         output_filename = f"{safe_title}.docx"
 
-        # Save to memory instead of disk
-        from io import BytesIO
         buffer = BytesIO()
-
-        doc = Document()
         save_summary_to_word(final_summary, buffer)
 
         summaries_dict[output_filename] = buffer.getvalue()
 
+        pdf_progress.progress(100)
+        pdf_status.success("✅ Completed")
+
+        # 🔹 Update overall progress
+        overall_progress.progress(int(100 * pdf_index / total_pdfs))
+
+    overall_status.success("🎉 All PDFs summarized successfully!")
+
     return summaries_dict
-
-
-
