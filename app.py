@@ -50,11 +50,22 @@ if query.strip():
     misspelled = spell.unknown(words)
 
     if misspelled:
-        corrected_words = [
-            spell.correction(word) if word in misspelled else word
-            for word in words
-        ]
+        corrected_words = []
+
+        for word in words:
+            if word in misspelled:
+                suggestion = spell.correction(word)
+        
+                # 🔒 SAFE GUARD: if suggestion is None, keep original word
+                if suggestion is None:
+                    corrected_words.append(word)
+                else:
+                    corrected_words.append(suggestion)
+            else:
+                corrected_words.append(word)
+
         corrected_query = " ".join(corrected_words)
+        
 
         if corrected_query != query:
             st.warning(f"Did you mean: **{corrected_query}** ?")
@@ -334,6 +345,7 @@ else:
         )
 
    
+
 
 
 
