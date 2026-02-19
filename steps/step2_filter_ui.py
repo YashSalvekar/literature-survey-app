@@ -15,8 +15,8 @@ def step2_filter_ui(df: pd.DataFrame):
         reviews_only = st.checkbox("Reviews only")
     with col3:
         open_access_only = st.checkbox("Open access only")
-    #with col4:
-       # top_n = st.number_input("Top N (0 = all)", min_value=0, value=0)
+    with col4:
+        top_n = st.number_input("Top N (0 = all)", min_value=0, value=0)
 
     if "Publication Year" in df.columns:
         year_min, year_max = int(df["Publication Year"].min()), int(df["Publication Year"].max())
