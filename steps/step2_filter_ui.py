@@ -62,9 +62,9 @@ def step2_filter_ui(df: pd.DataFrame):
             (filtered_df["Publication Year"] <= year_range[1])
         ]'''
     if year_selection and "Publication Year" in filtered_df.columns:
-    filtered_df = filtered_df[
-        filtered_df["Publication Year"].isin(year_selection)
-    ]
+        filtered_df = filtered_df[
+            filtered_df["Publication Year"].isin(year_selection)
+        ]
 
 
     if top_n and top_n > 0 and "Citations Count" in df.columns:
